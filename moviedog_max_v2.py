@@ -1,5 +1,5 @@
 """
-Простейший тестовый бот для Max
+Простейший тестовый бот для Max (без Command фильтра)
 """
 
 import asyncio
@@ -7,7 +7,6 @@ import logging
 import os
 from maxapi import Bot, Dispatcher
 from maxapi.types import Message
-from maxapi.filters import Command
 
 # Токен из переменных окружения
 MAX_TOKEN = os.environ.get("MAX_TOKEN", "")
@@ -23,48 +22,41 @@ bot = Bot(token=MAX_TOKEN)
 dp = Dispatcher()
 
 
-@dp.message(Command("start"))
-async def start(message: Message):
-    """Обработчик команды /start"""
-    await message.answer(
-        "🐾 Привет! Я тестовый бот!\n\n"
-        "✅ Бот успешно запущен\n"
-        "✅ Подключение к Max работает\n\n"
-        "Доступные команды:\n"
-        "/start - это сообщение\n"
-        "/ping - проверка связи\n"
-        "/info - информация о боте"
-    )
-
-
-@dp.message(Command("ping"))
-async def ping(message: Message):
-    """Проверка что бот жив"""
-    await message.answer("🏓 Понг! Бот работает и отвечает!")
-
-
-@dp.message(Command("info"))
-async def info(message: Message):
-    """Информация о боте"""
-    await message.answer(
-        "🤖 Тестовый бот для мессенджера Max\n\n"
-        "Версия: 1.0\n"
-        "Статус: ✅ активен\n\n"
-        "Это простейший пример для проверки работоспособности."
-    )
-
-
 @dp.message()
-async def echo(message: Message):
-    """На любое другое сообщение отвечаем эхом"""
+async def handle_all_messages(message: Message):
+    """Обработчик всех сообщений"""
     user_text = message.body.text if message.body else ""
-    if user_text:
+    
+    # Проверяем команды вручную
+    if user_text == "/start":
+        await message.answer(
+            "🐾 Привет! Я тестовый бот!\n\n"
+            "✅ Бот успешно запущен\n"
+            "✅ Подключение к Max работает\n\n"
+            "Доступные команды:\n"
+            "/start - это сообщение\n"
+            "/ping - проверка связи\n"
+            "/info - информация о боте"
+        )
+    
+    elif user_text == "/ping":
+        await message.answer("🏓 Понг! Бот работает и отвечает!")
+    
+    elif user_text == "/info":
+        await message.answer(
+            "🤖 Тестовый бот для мессенджера Max\n\n"
+            "Версия: 1.0\n"
+            "Статус: ✅ активен\n\n"
+            "Это простейший пример для проверки работоспособности."
+        )
+    
+    elif user_text:
         await message.answer(
             f"📝 Ты написал: {user_text}\n\n"
-            f"Используй /start для списка команд"
+            f"Напиши /start для списка команд"
         )
     else:
-        await message.answer("Используй /start для списка команд")
+        await message.answer("Напиши /start для списка команд")
 
 
 async def main():
