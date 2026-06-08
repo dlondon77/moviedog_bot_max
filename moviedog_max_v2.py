@@ -22,6 +22,10 @@ if not MAX_TOKEN:
 if not DEEPSEEK_KEY:
     raise ValueError("DEEPSEEK_KEY не задан!")
 
+# ID администратора (можно узнать через /start, он покажется в логах)
+# Пока оставим None, но можно указать свой ID
+YOUR_ADMIN_ID = None  # Замени на свой user_id, например: 7191208
+
 # ── ОГРАНИЧЕНИЯ ДЛЯ ЗАЩИТЫ ────────────────────────────────────────────────
 DAILY_LIMIT = 50          # Максимум 50 запросов в день (для тестирования)
 MONTHLY_BUDGET = 100      # Бюджет в рублях (DeepSeek очень дешёвый)
@@ -155,7 +159,7 @@ async def get_movie_recommendations(request: str, user_id: int = None) -> tuple[
         result = response.choices[0].message.content.strip()
         
         # Добавляем информационный футер с расходами (для администратора)
-        if user_id == YOUR_ADMIN_ID:  # Замени на свой ID
+        if YOUR_ADMIN_ID and user_id == YOUR_ADMIN_ID:
             result += f"\n\n---\n📊 Статистика: {total_tokens} токенов | {cost:.4f} ₽ | Сегодня: {usage_today}/{DAILY_LIMIT}"
         
         return result, stats
@@ -176,6 +180,7 @@ async def bot_started(event: BotStarted):
 
 @dp.message_created(Command("start"))
 async def cmd_start(event: MessageCreated):
+    # Используем parse_mode="html" (маленькими буквами!)
     await event.message.answer(
         "🐾 <b>Привет! Я КиноИщейка — твой кинопомощник!</b>\n\n"
         "Просто напиши, что хочешь посмотреть, и я составлю подборку:\n"
@@ -189,7 +194,7 @@ async def cmd_start(event: MessageCreated):
         "/stats — статистика использования\n"
         "/limit — узнать текущие лимиты\n\n"
         "🎬 <i>Поехали! Просто напиши свой запрос...</i>",
-        parse_mode="HTML"
+        parse_mode="html"  # ← ИСПРАВЛЕНО: "html" вместо "HTML"
     )
 
 
@@ -200,7 +205,7 @@ async def cmd_ping(event: MessageCreated):
 
 @dp.message_created(Command("stats"))
 async def cmd_stats(event: MessageCreated):
-    """Показывает статистику использования (только для админа)"""
+    """Показывает статистику использования"""
     global usage_today, total_spent
     
     remaining = MONTHLY_BUDGET - total_spent
@@ -212,7 +217,7 @@ async def cmd_stats(event: MessageCreated):
         f"💰 Потрачено за месяц: {total_spent:.2f} ₽ / {MONTHLY_BUDGET} ₽ {budget_status}\n"
         f"💸 Осталось: {max(0, remaining):.2f} ₽\n\n"
         f"<i>Лимиты обновляются в полночь по МСК</i>",
-        parse_mode="HTML"
+        parse_mode="html"  # ← ИСПРАВЛЕНО
     )
 
 
@@ -225,7 +230,7 @@ async def cmd_limit(event: MessageCreated):
         f"💰 Месячный бюджет: {MONTHLY_BUDGET} ₽\n"
         f"⚠️ Предупреждение при: {WARNING_THRESHOLD} ₽\n\n"
         f"<i>DeepSeek очень экономичный — 1 запрос стоит ~0.001-0.01 ₽</i>",
-        parse_mode="HTML"
+        parse_mode="html"  # ← ИСПРАВЛЕНО
     )
 
 
