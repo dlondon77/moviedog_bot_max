@@ -29,7 +29,7 @@ from openai import OpenAI
 import httpx
 
 from maxapi import Bot, Dispatcher
-from maxapi.types import Message, CallbackQuery
+from maxapi.types import Message
 from maxapi.types.keyboard import InlineKeyboardMarkup, InlineKeyboardButton
 from maxapi.filters import Command
 
@@ -560,17 +560,18 @@ async def handle_message(message: Message):
         await message.answer(reply)
 
 
-# ── Callback: мнение + оплата ─────────────────────────────────────────────────
-@dp.on.callback_query()
-async def handle_callback(callback: CallbackQuery):
-    data = callback.payload
-    user_id = callback.sender.user_id
+# ── Обработчик callback-запросов (замена на функцию в dp.callback_query) ─────
+@dp.callback_query()
+async def handle_callback(callback_query):
+    """Обработчик нажатий на инлайн-кнопки"""
+    data = callback_query.payload
+    user_id = callback_query.sender.user_id
     user = get_user(user_id)
 
     # ── Мнение о фильме ───────────────────────────────────────────────────────
     if data and data.startswith("opinion:"):
         if not can_get_opinion(user):
-            await callback.answer(
+            await callback_query.answer(
                 f"🐾 Лимит {FREE_OPINIONS_PER_DAY} мнения в день исчерпан!\n"
                 f"Подписка снимает ограничение — /subscribe",
                 show_alert=True
@@ -578,7 +579,7 @@ async def handle_callback(callback: CallbackQuery):
             return
 
         movie_id = int(data.split(":")[1])
-        await callback.answer("Смотрю в ускоренном режиме... 🎬")
+        await callback_query.answer("Смотрю в ускоренном режиме... 🎬")
 
         # Получаем полные данные о фильме
         headers = {"X-API-KEY": POISKKINO_KEY}
@@ -597,7 +598,7 @@ async def handle_callback(callback: CallbackQuery):
 
         if not movie:
             await bot.send_message(
-                chat_id=callback.chat.chat_id,
+                chat_id=callback_query.chat.chat_id,
                 text="🐾 Не смогла загрузить данные о фильме. Попробуй позже!"
             )
             return
@@ -615,7 +616,7 @@ async def handle_callback(callback: CallbackQuery):
             except Exception as e:
                 logger.error(f"Opinion error: {e}")
                 await bot.send_message(
-                    chat_id=callback.chat.chat_id,
+                    chat_id=callback_query.chat.chat_id,
                     text="🐾 Гав! Кажется, я перегрызла провод... Попробуй позже!"
                 )
                 return
@@ -626,7 +627,7 @@ async def handle_callback(callback: CallbackQuery):
         kp_url = f"https://www.kinopoisk.ru/film/{movie_id}/"
 
         await bot.send_message(
-            chat_id=callback.chat.chat_id,
+            chat_id=callback_query.chat.chat_id,
             text=(
                 f"Я посмотрела <a href='{kp_url}'>{name}</a> ({year}), вот что думаю:\n\n"
                 f"{opinion}\n\n🐾"
@@ -638,16 +639,16 @@ async def handle_callback(callback: CallbackQuery):
     elif data and data.startswith("pay:"):
         plan = data.split(":")[1]
         if plan not in PLANS:
-            await callback.answer("Неизвестный тариф")
+            await callback_query.answer("Неизвестный тариф")
             return
 
         order_id = f"{user_id}_{plan}_{int(datetime.now().timestamp())}"
-        await callback.answer("Создаю ссылку для оплаты...")
+        await callback_query.answer("Создаю ссылку для оплаты...")
 
         pay_url = await tinkoff_init(user_id, plan, order_id)
         if not pay_url:
             await bot.send_message(
-                chat_id=callback.chat.chat_id,
+                chat_id=callback_query.chat.chat_id,
                 text="🐾 Не удалось создать платёж. Попробуй позже или напиши в поддержку."
             )
             return
@@ -656,7 +657,7 @@ async def handle_callback(callback: CallbackQuery):
             InlineKeyboardButton(text="💳 Оплатить", url=pay_url)
         ]])
         await bot.send_message(
-            chat_id=callback.chat.chat_id,
+            chat_id=callback_query.chat.chat_id,
             text=(
                 f"🐾 Ссылка для оплаты готова!\n\n"
                 f"Тариф: {PLANS[plan]['label']}\n"
