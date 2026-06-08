@@ -1,0 +1,4 @@
+maxapi
+openai
+aiohttp
+httpx
