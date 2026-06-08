@@ -29,8 +29,7 @@ from openai import OpenAI
 import httpx
 
 from maxapi import Bot, Dispatcher
-from maxapi.types import Message
-from maxapi.types.keyboard import InlineKeyboardMarkup, InlineKeyboardButton
+from maxapi.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
 from maxapi.filters import Command
 
 # ── НАСТРОЙКИ ─────────────────────────────────────────────────────────────────
@@ -560,7 +559,7 @@ async def handle_message(message: Message):
         await message.answer(reply)
 
 
-# ── Обработчик callback-запросов (замена на функцию в dp.callback_query) ─────
+# ── Обработчик callback-запросов ─────────────────────────────────────────────
 @dp.callback_query()
 async def handle_callback(callback_query):
     """Обработчик нажатий на инлайн-кнопки"""
