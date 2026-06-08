@@ -1,20 +1,25 @@
 """
-КиноИщейка Lite — подборки фильмов через DeepSeek (без API poiskkino)
+КиноИщейка — подборки фильмов через DeepSeek
 """
 
 import asyncio
 import logging
 import os
-import json
 from openai import OpenAI
 import httpx
 from maxapi import Bot, Dispatcher
 from maxapi.types import Message
+from maxapi import InlineKeyboardMarkup, InlineKeyboardButton
 from maxapi.filters import Command
 
 # ── НАСТРОЙКИ ─────────────────────────────────────────────────────────────
-MAX_TOKEN = os.environ.get("MAX_TOKEN", "ВАШ_ТОКЕН_MAX")
-DEEPSEEK_KEY = os.environ.get("DEEPSEEK_KEY", "ВАШ_КЛЮЧ_DEEPSEEK")
+MAX_TOKEN = os.environ.get("MAX_TOKEN", "")
+DEEPSEEK_KEY = os.environ.get("DEEPSEEK_KEY", "")
+
+if not MAX_TOKEN:
+    raise ValueError("MAX_TOKEN не задан!")
+if not DEEPSEEK_KEY:
+    raise ValueError("DEEPSEEK_KEY не задан!")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -22,7 +27,7 @@ logger = logging.getLogger(__name__)
 bot = Bot(token=MAX_TOKEN)
 dp = Dispatcher()
 
-# Настройка клиента DeepSeek
+# Настройка DeepSeek
 http_client = httpx.Client(timeout=60.0, follow_redirects=True)
 ai_client = OpenAI(
     api_key=DEEPSEEK_KEY,
@@ -31,33 +36,27 @@ ai_client = OpenAI(
 )
 
 
-# ── ФУНКЦИЯ ГЕНЕРАЦИИ ПОДБОРКИ ────────────────────────────────────────────
-async def get_movie_recommendations(prompt: str) -> str:
-    """
-    Просит DeepSeek составить подборку фильмов
-    """
-    system_prompt = """Ты — КиноИщейка, собака-девочка, кинокритик с отличным чутьём на хорошее кино.
+# ── ФУНКЦИЯ ПОДБОРКИ ─────────────────────────────────────────────────────
+async def get_recommendations(request: str) -> str:
+    """Получает подборку фильмов от DeepSeek"""
+    
+    system_prompt = """Ты — КиноИщейка, собака-девочка, кинокритик.
 Говори о себе в женском роде, с юмором и энтузиазмом.
 
-Когда пользователь просит подборку фильмов:
-1. Всегда предлагай 3-5 фильмов
-2. Для каждого фильма укажи: название, год, рейтинг (вымышленный, но правдоподобный), краткое описание
-3. В конце добавь короткую рекомендацию, что лучше посмотреть первым
-4. Форматируй ответ красиво, с эмодзи
-5. Фильмы должны быть реально существующими (из мировой киноклассики, популярных фильмов последних лет)
+Когда просят подборку фильмов:
+1. Предложи 3-5 фильмов
+2. Для каждого: название (год), рейтинг (X/10), краткое описание
+3. В конце посоветуй, что посмотреть первым
+4. Используй эмодзи для оформления
+5. Фильмы должны быть реальными (известные фильмы)"""
 
-Отвечай по-русски, дружелюбно."""
+    user_prompt = f"""Составь подборку фильмов по запросу: "{request}"
 
-    user_prompt = f"""Составь подборку фильмов по запросу: "{prompt}"
-
-Требования к ответу:
-- Используй эмодзи для украшения
-- Каждый фильм в формате:
+Формат:
 🎬 Название (Год) — ⭐ Рейтинг: X/10
-📝 Краткое описание (1-2 предложения)
+📝 Краткое описание
 
-- В конце напиши "🐾 Первым советую посмотреть: [название]" 
-и почему именно его"""
+В конце: 🐾 Первым советую: [название] потому что..."""
 
     try:
         response = ai_client.chat.completions.create(
@@ -70,73 +69,84 @@ async def get_movie_recommendations(prompt: str) -> str:
         )
         return response.choices[0].message.content.strip()
     except Exception as e:
-        logger.error(f"Ошибка DeepSeek: {e}")
-        return "🐾 Гав! Что-то пошло не так. Попробуй переформулировать запрос!"
+        logger.error(f"DeepSeek error: {e}")
+        return "🐾 Гав! Что-то пошло не так. Попробуй ещё раз!"
 
 
-# ── ХЕНДЛЕРЫ ──────────────────────────────────────────────────────────────
+# ── КОМАНДЫ ──────────────────────────────────────────────────────────────
 @dp.message(Command("start"))
 async def cmd_start(message: Message):
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🎲 Случайный фильм", callback_data="random")],
+        [InlineKeyboardButton(text="❤️ Романтика", callback_data="romance")],
+        [InlineKeyboardButton(text="😂 Комедия", callback_data="comedy")],
+        [InlineKeyboardButton(text="😱 Ужасы", callback_data="horror")],
+    ])
+    
     await message.answer(
         "🐾 <b>Привет! Я КиноИщейка!</b>\n\n"
-        "Я помогу подобрать фильмы под твоё настроение!\n\n"
-        "<b>Просто напиши что хочешь посмотреть, например:</b>\n"
-        "• «подбери фильм на вечер»\n"
-        "• «хочу что-то смешное»\n"
-        "• «атмосферный триллер»\n"
-        "• «любовная драма»\n"
-        "• «что посмотреть с семьёй»\n\n"
-        "Я составлю персональную подборку! 🎬",
-        parse_mode="HTML"
+        "Просто напиши, что хочешь посмотреть, например:\n"
+        "• «что-то атмосферное на вечер»\n"
+        "• «хороший детектив»\n"
+        "• «фильм под пиво»\n\n"
+        "Или выбери кнопку ниже 👇",
+        parse_mode="HTML",
+        reply_markup=keyboard
     )
 
 
 @dp.message(Command("help"))
 async def cmd_help(message: Message):
     await message.answer(
-        "🐾 <b>Как я работаю:</b>\n\n"
-        "Просто напиши мне, что хочешь посмотреть, и я:\n"
-        "1️⃣ Спрошу DeepSeek о лучших фильмах\n"
-        "2️⃣ Составлю подборку из 3-5 фильмов\n"
-        "3️⃣ Добавлю описание и рейтинг\n"
-        "4️⃣ Посоветую, с чего начать\n\n"
+        "🐾 <b>Как это работает:</b>\n\n"
+        "Я использую DeepSeek, чтобы подобрать фильмы под твоё настроение.\n\n"
         "<b>Примеры запросов:</b>\n"
         "• «фантастика про космос»\n"
-        "• «хороший детектив»\n"
-        "• «мультфильм для детей»\n"
-        "• «фильм под пиво»\n"
-        "• «шедевры мирового кино»",
+        "• «что посмотреть с девушкой»\n"
+        "• «лучшие фильмы 90-х»\n"
+        "• «мотивирующее кино»",
         parse_mode="HTML"
     )
 
 
-@dp.message(Command("random"))
-async def cmd_random(message: Message):
-    await message.answer("🎲 Дай-ка подумаю, что тебе посмотреть...")
-    recommendation = await get_movie_recommendations("случайный хороший фильм, который всем нравится")
-    await message.answer(recommendation)
-
-
 @dp.message()
 async def handle_message(message: Message):
-    """Обрабатывает любые сообщения как запрос на подборку"""
     user_message = message.body.text if message.body else ""
     if not user_message:
         return
     
-    # Показываем, что бот думает
-    await message.answer("🐾 Нюхаю свою базу знаний... 🎬")
-    
-    # Получаем подборку от DeepSeek
-    recommendations = await get_movie_recommendations(user_message)
-    
-    # Отправляем результат
+    await message.answer("🐾 Нюхаю базу знаний... 🎬")
+    recommendations = await get_recommendations(user_message)
     await message.answer(recommendations)
+
+
+# ── ОБРАБОТКА КНОПОК ─────────────────────────────────────────────────────
+@dp.callback_query()
+async def handle_callback(callback_query):
+    data = callback_query.payload
+    
+    await callback_query.answer("Ищу фильмы...")
+    
+    if data == "random":
+        result = await get_recommendations("случайный хороший фильм")
+    elif data == "romance":
+        result = await get_recommendations("романтический фильм")
+    elif data == "comedy":
+        result = await get_recommendations("смешная комедия")
+    elif data == "horror":
+        result = await get_recommendations("страшный фильм ужасов")
+    else:
+        result = await get_recommendations(data)
+    
+    await bot.send_message(
+        chat_id=callback_query.chat.chat_id,
+        text=result
+    )
 
 
 # ── ЗАПУСК ────────────────────────────────────────────────────────────────
 async def main():
-    logger.info("КиноИщейка (DeepSeek version) запускается...")
+    logger.info("КиноИщейка запускается...")
     await dp.start_polling(bot)
 
 
