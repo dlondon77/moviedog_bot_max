@@ -2,3 +2,4 @@ maxapi
 openai
 aiohttp
 httpx
+python-telegram-bot==20.7
