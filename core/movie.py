@@ -88,7 +88,6 @@ def search_movies_in_db(query: str, min_rating: float = 0.0, max_rating: float =
     finally:
         conn.close()
 
-
 def search_movies_by_person_in_db(query: str, min_rating: float = 0.0, max_rating: float = 10.0) -> list:
     """Улучшенный поиск по персонам"""
     conn = db.get_movies_db_connection()
@@ -127,7 +126,6 @@ def search_movies_by_person_in_db(query: str, min_rating: float = 0.0, max_ratin
         return []
     finally:
         conn.close()
-
 
 def search_person_matches(patterns: list, min_rating: float, max_rating: float) -> list:
     """Поиск персон по заданным шаблонам"""
@@ -176,7 +174,6 @@ def search_person_matches(patterns: list, min_rating: float, max_rating: float) 
         return [get_movie_details(row[0]) for row in cursor.fetchall() if row[0]]
     finally:
         conn.close()
-
 
 def get_movie_details(movie_id: int) -> dict:
     """Получение полной информации о фильме с актерами и режиссерами"""
@@ -228,7 +225,6 @@ def get_movie_details(movie_id: int) -> dict:
     finally:
         conn.close()
 
-
 def get_random_movie_from_db(min_rating: float = 7.0, max_rating: float = 10.0, is_new_only: bool = False) -> dict:
     """Получение случайного фильма из объединенного кэша"""
     conn = db.get_movies_db_connection()
@@ -278,7 +274,6 @@ def get_random_movie_from_db(min_rating: float = 7.0, max_rating: float = 10.0, 
     finally:
         conn.close()
 
-
 def get_premier_movies_from_db() -> list:
     """Получение списка премьерных фильмов за последний месяц и будущих"""
     conn = db.get_movies_db_connection()
@@ -315,7 +310,7 @@ def get_premier_movies_from_db() -> list:
         conn.close()
 
 def format_movie_card(movie, is_premiers=False, query=None, is_person_search=False):
-    """Форматирует карточку фильма для отправки пользователю"""
+    """Форматирует карточку фильма для отправки пользователю (без кнопок)"""
     if not movie or not isinstance(movie, dict):
         return None, None
 
@@ -343,32 +338,23 @@ def format_movie_card(movie, is_premiers=False, query=None, is_person_search=Fal
         genres = ', '.join(movie.get('genres', [])) if movie.get('genres') else 'отсутствует'
         description = movie.get('description', 'отсутствует') or 'отсутствует'
         
-        # Получаем всех режиссеров
+        if len(description) > 500:
+            description = description[:500] + '...'
+        
+        # Режиссеры
         directors_list = []
         for director in movie.get('directors', []):
             director_name = director.get('name', '') or director.get('enName', '')
-            director_id = director.get('id', '')
-            
             if director_name:
-                if is_person_search and director_id and query and query.lower() in director_name.lower():
-                    director_url = f"https://www.kinopoisk.ru/name/{director_id}/"
-                    director_name = f"<a href='{director_url}'>{director_name}</a>"
                 directors_list.append(director_name)
-        
         directors = ', '.join(directors_list) if directors_list else 'отсутствует'
         
-        # Актеры (первые 10)
+        # Актеры (первые 5 для краткости)
         actors_list = []
-        for actor in movie.get('actors', [])[:10]:
+        for actor in movie.get('actors', [])[:5]:
             actor_name = actor.get('name', '') or actor.get('enName', '')
-            actor_id = actor.get('id', '')
-            
             if actor_name:
-                if is_person_search and actor_id and query and query.lower() in actor_name.lower():
-                    actor_url = f"https://www.kinopoisk.ru/name/{actor_id}/"
-                    actor_name = f"<a href='{actor_url}'>{actor_name}</a>"
                 actors_list.append(actor_name)
-        
         actors = ', '.join(actors_list) if actors_list else 'отсутствует'
         
         # Премьеры для новинок
@@ -387,8 +373,7 @@ def format_movie_card(movie, is_premiers=False, query=None, is_person_search=Fal
                         return datetime.strptime(date_part, "%Y-%m-%d").strftime("%d.%m.%Y")
                     else:
                         return datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S").strftime("%d.%m.%Y")
-                except Exception as e:
-                    logger.error(f"Ошибка форматирования даты: {date_str}, {e}")
+                except Exception:
                     return 'отсутствует'
             
             premiere_info = (
@@ -397,11 +382,10 @@ def format_movie_card(movie, is_premiers=False, query=None, is_person_search=Fal
                 f"👥 Ожидают: <b>{int(await_count) if await_count else 0}</b> чел.\n"
             )
         
-        poster_url = movie.get('poster_url', f"https://st.kp.yandex.net/images/film_big/{movie_id}.jpg")
         kp_url = f"https://www.kinopoisk.ru/film/{movie_id}/" if movie_id else "https://www.kinopoisk.ru/"
      
         card = (
-            f"<a href='{poster_url}'>🎬</a> <a href='{kp_url}'><b>{title}</b></a> {year_display}\n"
+            f"🎬 <b>{title}</b> {year_display}\n"
             f"📁 Тип: <b>{type_text}</b>\n"
             f"⭐ Рейтинг Кинопоиска: <b>{rating}</b>\n"
             f"🌍 Страна: <b>{countries}</b>\n"
@@ -409,17 +393,12 @@ def format_movie_card(movie, is_premiers=False, query=None, is_person_search=Fal
             f"{premiere_info}"
             f"📝 Описание: <i>{description}</i>\n"
             f"🎥 Режиссер: <b>{directors}</b>\n"
-            f"👥 Актеры: <b>{actors}</b>\n"
+            f"👥 Актеры: <b>{actors}</b>\n\n"
+            f"🔗 <a href='{kp_url}'>Кинопоиск</a>"
         )
         
-        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-        keyboard = []
-        
-        if movie_id and year:
-            callback_data = f"ai:{movie_id}:{year}"[:64]
-            keyboard.append([InlineKeyboardButton("Мнение КиноИщейки", callback_data=callback_data)])
-        
-        return card, InlineKeyboardMarkup(keyboard) if keyboard else None
+        # Для Max возвращаем None вместо клавиатуры
+        return card, None
         
     except Exception as e:
         logger.error(f"Ошибка форматирования карточки фильма: {e}")
@@ -495,131 +474,13 @@ def search_movies_with_filters(query, filters=None, count_only=False):
     
     if count_only:
         # Если получили ровно 100 фильмов, значит возможно есть ещё
-        # (потому что search_movies_in_db ограничивает 100)
         has_more = (len(filtered_movies) >= 100)
         return (len(filtered_movies), has_more)
     else:
         return filtered_movies
-        
+
 def format_filter_keyboard(query, current_filters=None, total_count=0, has_more=False):
     """
-    Создает клавиатуру с фильтрами для поиска
-    Теперь с toggle-кнопками (повторное нажатие снимает фильтр)
-    
-    Args:
-        query: поисковый запрос
-        current_filters: текущие активные фильтры
-        total_count: количество найденных фильмов
-        has_more: есть ли еще фильмы сверх лимита
+    Заглушка для Max — клавиатуры с фильтрами пока не поддерживаются
     """
-    from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-    
-    if current_filters is None:
-        current_filters = {}
-    
-    keyboard = []
-    
-    # Статистика
-    if total_count > 0:
-        if has_more:
-            count_text = f">{total_count}"
-        else:
-            count_text = str(total_count)
-            
-        keyboard.append([InlineKeyboardButton(
-            f"📊 Найдено: {count_text} фильмов", 
-            callback_data="noop"
-        )])
-    
-    # ===== ФИЛЬТР ПО РЕЙТИНГУ =====
-    rating_row = []
-    current_rating = current_filters.get('rating_range')
-    
-    rating_options = [
-        ('new', '🆕 Новинки'),
-        ('5-6', '⭐ 5-6'),
-        ('6-7', '⭐ 6-7'),
-        ('7-8', '⭐ 7-8'),
-        ('8-9', '⭐ 8-9'),
-        ('9-10', '⭐ 9-10')
-    ]
-    
-    for value, label in rating_options:
-        if current_rating == value:
-            # Активный фильтр - показываем с галочкой
-            rating_row.append(InlineKeyboardButton(
-                f"✓ {label}", 
-                callback_data=f"filter_toggle_rating_{value}_{query}"
-            ))
-        else:
-            rating_row.append(InlineKeyboardButton(
-                label, 
-                callback_data=f"filter_toggle_rating_{value}_{query}"
-            ))
-    
-    # Разбиваем на две строки для компактности
-    if rating_row:
-        keyboard.append(rating_row[:3])  # Первые 3 кнопки
-        keyboard.append(rating_row[3:])   # Остальные
-    
-    # ===== ФИЛЬТР ПО ДЕСЯТИЛЕТИЯМ =====
-    decade_row = []
-    current_decade = current_filters.get('decade')
-    
-    decade_options = [
-        ('pre1980', '📽 До 1980'),
-        ('1980s', '📅 1980-е'),
-        ('1990s', '📅 1990-е'),
-        ('2000s', '📅 2000-е'),
-        ('2010s', '📅 2010-е'),
-        ('2020s', '📅 2020-е')
-    ]
-    
-    for value, label in decade_options:
-        if current_decade == value:
-            decade_row.append(InlineKeyboardButton(
-                f"✓ {label}", 
-                callback_data=f"filter_toggle_decade_{value}_{query}"
-            ))
-        else:
-            decade_row.append(InlineKeyboardButton(
-                label, 
-                callback_data=f"filter_toggle_decade_{value}_{query}"
-            ))
-    
-    # Разбиваем на две строки
-    if decade_row:
-        keyboard.append(decade_row[:3])
-        keyboard.append(decade_row[3:])
-    
-    # ===== КНОПКА ПОКАЗА РЕЗУЛЬТАТОВ =====
-    if total_count > 0:
-        if has_more:
-            button_text = f"🎬 Показать первые {total_count}"
-        else:
-            button_text = f"🎬 Показать карточки ({total_count})"
-            
-        keyboard.append([InlineKeyboardButton(
-            button_text, 
-            callback_data=f"filter_show_results_{query}"
-        )])
-    
-    # ===== КНОПКИ УПРАВЛЕНИЯ =====
-    control_row = []
-    
-    # Кнопка сброса (если есть активные фильтры)
-    if current_filters:
-        control_row.append(InlineKeyboardButton(
-            "🔄 Сбросить все", 
-            callback_data=f"filter_reset_all_{query}"
-        ))
-    
-    control_row.append(InlineKeyboardButton(
-        "🆕 Новый поиск", 
-        callback_data="new_search"
-    ))
-    
-    if control_row:
-        keyboard.append(control_row)
-    
-    return InlineKeyboardMarkup(keyboard)
+    return None
