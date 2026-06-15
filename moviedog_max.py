@@ -15,6 +15,9 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 
-if __name__ == "__main__":
+async def main():
     adapter = MaxAdapter()
-    adapter.run()  # maxgram использует синхронный run, не asyncio
+    await adapter.run()
+
+if __name__ == "__main__":
+    asyncio.run(main())
