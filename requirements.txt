@@ -1,4 +1,5 @@
 maxapi
+maxbot
 openai
 aiohttp
 httpx
