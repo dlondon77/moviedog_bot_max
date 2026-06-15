@@ -1,4 +1,4 @@
-# core/max_adapter.py — с генерацией мнений через DeepSeek
+# core/max_adapter.py — версия на maxgram с кнопками
 
 import logging
 import configparser
@@ -17,25 +17,21 @@ if CORE_DIR not in sys.path:
 # Настраиваем логгер
 logger = logging.getLogger(__name__)
 
-from maxapi import Bot, Dispatcher
-from maxapi.types import BotStarted, Command, MessageCreated
-from openai import OpenAI
-import httpx
-
-# Пробуем импортировать клавиатуру (для будущего)
+# Импорты из maxgram
 try:
-    from maxapi.types import InlineKeyboardMarkup, InlineKeyboardButton
-    HAS_KEYBOARD = True
-except ImportError:
-    class InlineKeyboardMarkup:
-        def __init__(self, inline_keyboard=None):
-            self.inline_keyboard = inline_keyboard or []
-    class InlineKeyboardButton:
-        def __init__(self, text, callback_data=None, url=None):
-            self.text = text
-            self.callback_data = callback_data
-            self.url = url
-    HAS_KEYBOARD = False
+    from maxgram import Bot
+    from maxgram.keyboards import InlineKeyboard
+    HAS_MAXGRAM = True
+    logger.info("✅ maxgram успешно загружен")
+except ImportError as e:
+    logger.error(f"❌ maxgram не установлен: {e}")
+    HAS_MAXGRAM = False
+    # Создаём заглушку
+    class Bot:
+        def __init__(self, token):
+            self.token = token
+        def run(self):
+            pass
 
 # Импорты из core
 import user as user_module
@@ -57,14 +53,10 @@ get_premier_movies_from_db = movie_module.get_premier_movies_from_db
 
 # Функции для работы с кэшем мнений
 def get_cached_opinion(movie_id: int):
-    """Получает мнение из кэша"""
     conn = db_module.get_opinions_db_connection()
     try:
         cursor = conn.cursor()
-        cursor.execute(
-            'SELECT full_opinion FROM movie_opinions WHERE movie_id = ?',
-            (int(movie_id),)
-        )
+        cursor.execute('SELECT full_opinion FROM movie_opinions WHERE movie_id = ?', (int(movie_id),))
         row = cursor.fetchone()
         return row[0] if row else None
     except Exception as e:
@@ -73,24 +65,20 @@ def get_cached_opinion(movie_id: int):
     finally:
         conn.close()
 
-
 def save_opinion_cache(movie_id: int, full_opinion: str):
-    """Сохраняет мнение в кэш"""
     conn = db_module.get_opinions_db_connection()
     try:
         cursor = conn.cursor()
         cursor.execute('''
-            INSERT OR REPLACE INTO movie_opinions 
-            (movie_id, full_opinion, short_opinion, created_at)
+            INSERT OR REPLACE INTO movie_opinions (movie_id, full_opinion, short_opinion, created_at)
             VALUES (?, ?, ?, ?)
         ''', (int(movie_id), full_opinion, '', datetime.now().isoformat()))
         conn.commit()
-        logger.info(f"Мнение для фильма {movie_id} сохранено в кэш")
+        logger.info(f"Мнение для фильма {movie_id} сохранено")
     except Exception as e:
         logger.error(f"Ошибка сохранения кэша: {e}")
     finally:
         conn.close()
-
 
 def load_config():
     config_path = os.path.join(BASE_DIR, 'config', 'config.ini')
@@ -98,11 +86,13 @@ def load_config():
     config.read(config_path, encoding='utf-8')
     return config
 
-
 # Настройка DeepSeek
 config = load_config()
 DEEPSEEK_KEY = os.environ.get('OPENAI_API_KEY') or config.get('OpenAI', 'api_key', fallback='')
+
 if DEEPSEEK_KEY:
+    from openai import OpenAI
+    import httpx
     http_client = httpx.Client(timeout=60.0, follow_redirects=True)
     ai_client = OpenAI(
         api_key=DEEPSEEK_KEY,
@@ -112,7 +102,7 @@ if DEEPSEEK_KEY:
     logger.info("✅ DeepSeek клиент инициализирован")
 else:
     ai_client = None
-    logger.warning("⚠️ OPENAI_API_KEY не найден, мнения не будут работать")
+    logger.warning("⚠️ OPENAI_API_KEY не найден")
 
 
 class MaxAdapter:
@@ -123,137 +113,183 @@ class MaxAdapter:
         if not self.token:
             raise ValueError("MAX_TOKEN не найден!")
         
-        self.bot = Bot(token=self.token)
-        self.dp = Dispatcher()
-        self.user_context = {}
+        if not HAS_MAXGRAM:
+            raise ImportError("maxgram не установлен! Установи: pip install maxgram")
+        
+        self.bot = Bot(self.token)
+        self.user_context = {}  # {user_id: {'state': ..., 'query': ...}}
         
         self._register_handlers()
-        logger.info(f"✅ MaxAdapter инициализирован")
-        logger.info(f"   Поддержка кнопок: {'Да' if HAS_KEYBOARD else 'Нет'}")
-        logger.info(f"   DeepSeek: {'Доступен' if ai_client else 'Недоступен'}")
+        logger.info(f"✅ MaxAdapter (maxgram) инициализирован")
     
     def _register_handlers(self):
-        @self.dp.bot_started()
-        async def on_bot_started(event: BotStarted):
-            await event.bot.send_message(
-                chat_id=event.chat_id,
-                text="🐾 Привет! Я КиноИщейка!\nНапиши /start"
+        """Регистрирует все обработчики maxgram"""
+        
+        # Главная клавиатура
+        self.main_keyboard = InlineKeyboard([
+            [{"text": "🎲 Случайный фильм", "callback": "random"}],
+            [{"text": "🔍 Поиск", "callback": "search"}],
+            [{"text": "🎉 Премьеры", "callback": "premiers"}],
+            [{"text": "🎭 Поиск по актёрам", "callback": "person"}],
+            [{"text": "👤 Мой профиль", "callback": "profile"}],
+            [{"text": "🐾 Мнение о фильме", "callback": "opinion_prompt"}],
+        ])
+        
+        @self.bot.command("start")
+        def start_command(context):
+            user_id = context.user_id
+            username = getattr(context, 'username', '') or ''
+            first_name = getattr(context, 'first_name', '') or ''
+            last_name = getattr(context, 'last_name', '') or ''
+            
+            try:
+                register_user(
+                    user_id=user_id,
+                    username=username,
+                    first_name=first_name,
+                    last_name=last_name,
+                    platform='max'
+                )
+                logger.info(f"✅ Пользователь {user_id} зарегистрирован")
+            except Exception as e:
+                logger.error(f"Ошибка регистрации: {e}")
+            
+            limits = get_user_limits(user_id)
+            
+            context.reply(
+                f"🐾 <b>Гав! Я КиноИщейка!</b>\n\n"
+                f"📊 <b>Твой тариф:</b> {limits.get('tariff_name', 'Щенячий азарт')}\n"
+                f"🎬 <b>Мнений сегодня:</b> 0/{limits.get('opinion_limit', 3)}\n\n"
+                f"👇 <b>Выбери действие:</b>",
+                parse_mode="html",
+                keyboard=self.main_keyboard
             )
         
-        @self.dp.message_created(Command("start"))
-        async def on_start(event: MessageCreated):
-            await self._handle_start(event)
-        
-        @self.dp.message_created(Command("random"))
-        async def on_random(event: MessageCreated):
-            await self._handle_random(event)
-        
-        @self.dp.message_created(Command("search"))
-        async def on_search(event: MessageCreated):
-            user_id = event.message.sender.user_id
-            self.user_context[user_id] = {'state': 'awaiting_search'}
-            await event.message.answer("🔍 Введи название фильма:")
-        
-        @self.dp.message_created(Command("premiers"))
-        async def on_premiers(event: MessageCreated):
-            await self._handle_premiers(event)
-        
-        @self.dp.message_created(Command("person"))
-        async def on_person(event: MessageCreated):
-            user_id = event.message.sender.user_id
-            self.user_context[user_id] = {'state': 'awaiting_person'}
-            await event.message.answer("🎭 Введи имя актёра или режиссёра:")
-        
-        @self.dp.message_created(Command("profile"))
-        async def on_profile(event: MessageCreated):
-            await self._handle_profile(event)
-        
-        @self.dp.message_created(Command("opinion"))
-        async def on_opinion(event: MessageCreated):
-            await self._handle_opinion_command(event)
-        
-        @self.dp.message_created(Command("help"))
-        async def on_help(event: MessageCreated):
-            await event.message.answer(
+        @self.bot.command("help")
+        def help_command(context):
+            context.reply(
                 "❓ <b>Команды:</b>\n\n"
-                "/start — приветствие\n"
+                "/start — главное меню\n"
                 "/random — случайный фильм\n"
                 "/search — поиск по названию\n"
                 "/premiers — ожидаемые премьеры\n"
-                "/person — поиск по актёрам/режиссёрам\n"
-                "/opinion [название или ID] — мнение о фильме\n"
+                "/person — поиск по актёрам\n"
+                "/opinion [название] — мнение о фильме\n"
                 "/profile — мой профиль\n"
                 "/help — это сообщение",
                 parse_mode="html"
             )
         
-        @self.dp.message_created()
-        async def on_message(event: MessageCreated):
-            await self._handle_message(event)
+        @self.bot.command("random")
+        def random_command(context):
+            self._handle_random_command(context)
+        
+        @self.bot.command("search")
+        def search_command(context):
+            self.user_context[context.user_id] = {'state': 'awaiting_search'}
+            context.reply("🔍 Введи название фильма:")
+        
+        @self.bot.command("premiers")
+        def premiers_command(context):
+            self._handle_premiers_command(context)
+        
+        @self.bot.command("person")
+        def person_command(context):
+            self.user_context[context.user_id] = {'state': 'awaiting_person'}
+            context.reply("🎭 Введи имя актёра или режиссёра:")
+        
+        @self.bot.command("opinion")
+        def opinion_command(context):
+            # Получаем текст после /opinion
+            text = context.message.text.replace('/opinion', '').strip()
+            if text:
+                self._handle_opinion(context, text)
+            else:
+                context.reply(
+                    "🐾 Укажи фильм:\n"
+                    "• /opinion 435 — по ID Кинопоиска\n"
+                    "• /opinion Зеленая миля — по названию"
+                )
+        
+        @self.bot.command("profile")
+        def profile_command(context):
+            self._handle_profile_command(context)
+        
+        @self.bot.on("message_callback")
+        def handle_callback(context):
+            """Обработка нажатий на инлайн-кнопки"""
+            payload = context.payload
+            user_id = context.user_id
+            logger.info(f"Callback от {user_id}: {payload}")
+            
+            if payload == "random":
+                self._handle_random_command(context)
+            elif payload == "search":
+                self.user_context[user_id] = {'state': 'awaiting_search'}
+                context.reply_callback("🔍 Введи название фильма:", is_current=True)
+            elif payload == "premiers":
+                self._handle_premiers_command(context)
+            elif payload == "person":
+                self.user_context[user_id] = {'state': 'awaiting_person'}
+                context.reply_callback("🎭 Введи имя актёра или режиссёра:", is_current=True)
+            elif payload == "profile":
+                self._handle_profile_command(context)
+            elif payload == "opinion_prompt":
+                context.reply_callback("🐾 Введи ID или название фильма:", is_current=True)
+                self.user_context[user_id] = {'state': 'awaiting_opinion'}
+            else:
+                context.reply_callback(f"🐾 Неизвестная команда", is_current=True)
+        
+        @self.bot.on("message")
+        def handle_message(context):
+            """Обработка текстовых сообщений"""
+            user_id = context.user_id
+            text = context.text
+            state = self.user_context.get(user_id, {}).get('state')
+            
+            if state == 'awaiting_search':
+                self._handle_search(context, text)
+                self.user_context.pop(user_id, None)
+            elif state == 'awaiting_person':
+                self._handle_person_search(context, text)
+                self.user_context.pop(user_id, None)
+            elif state == 'awaiting_opinion':
+                self._handle_opinion(context, text)
+                self.user_context.pop(user_id, None)
+            else:
+                context.reply("🐾 Используй /start для меню или /help для списка команд")
     
-    async def _handle_start(self, event: MessageCreated):
-        user_id = event.message.sender.user_id
-        username = getattr(event.message.sender, 'username', '') or ''
-        first_name = getattr(event.message.sender, 'first_name', '') or ''
-        last_name = getattr(event.message.sender, 'last_name', '') or ''
-        
-        try:
-            register_user(
-                user_id=user_id,
-                username=username,
-                first_name=first_name,
-                last_name=last_name,
-                platform='max'
-            )
-            logger.info(f"✅ Пользователь {user_id} зарегистрирован")
-        except Exception as e:
-            logger.error(f"Ошибка регистрации: {e}")
-        
-        limits = get_user_limits(user_id)
-        
-        welcome_text = (
-            f"🐾 <b>Гав! Я КиноИщейка!</b>\n\n"
-            f"📊 <b>Твой тариф:</b> {limits.get('tariff_name', 'Щенячий азарт')}\n"
-            f"🎬 <b>Мнений сегодня:</b> 0/{limits.get('opinion_limit', 3)}\n\n"
-            f"👇 <b>Команды:</b>\n"
-            f"• /random — случайный фильм\n"
-            f"• /search — поиск по названию\n"
-            f"• /premiers — ожидаемые премьеры\n"
-            f"• /person — поиск по актёрам/режиссёрам\n"
-            f"• /opinion [название] — мнение о фильме\n"
-            f"• /profile — мой профиль\n"
-            f"• /help — помощь"
-        )
-        
-        await event.message.answer(welcome_text, parse_mode="html")
+    # ==================== ОСНОВНЫЕ ОБРАБОТЧИКИ ====================
     
-    async def _handle_random(self, event: MessageCreated):
-        user_id = event.message.sender.user_id
-        await event.message.answer("🎲 Ищу случайный фильм...")
+    def _handle_random_command(self, context):
+        context.reply_callback("🎲 Ищу случайный фильм...", is_current=True)
         
         movie_data = get_random_movie_from_db(min_rating=7.0, is_new_only=False)
         if not movie_data:
-            await event.message.answer("😢 Не нашла фильмов.")
+            context.reply("😢 Не нашла фильмов.")
             return
         
         movie_details = get_movie_details(movie_data['id'])
         if not movie_details:
-            await event.message.answer("😢 Не могу найти информацию.")
+            context.reply("😢 Не могу найти информацию.")
             return
         
         card_text, _ = format_movie_card(movie_details)
         if card_text:
-            await event.message.answer(card_text, parse_mode='html')
+            # Добавляем кнопку для мнения
+            keyboard = InlineKeyboard([
+                [{"text": "🐾 Мнение о фильме", "callback": f"opinion_{movie_details['id']}"}]
+            ])
+            context.reply(card_text, parse_mode="html", keyboard=keyboard)
         else:
-            await event.message.answer("😢 Не могу показать карточку.")
+            context.reply("😢 Не могу показать карточку.")
     
-    async def _handle_premiers(self, event: MessageCreated):
-        user_id = event.message.sender.user_id
-        await event.message.answer("🎉 Ищу ожидаемые премьеры...")
+    def _handle_premiers_command(self, context):
+        context.reply_callback("🎉 Ищу ожидаемые премьеры...", is_current=True)
         
         premiers_list = get_premier_movies_from_db()
         if not premiers_list:
-            await event.message.answer("😢 Сейчас нет ожидаемых премьер.")
+            context.reply("😢 Сейчас нет ожидаемых премьер.")
             return
         
         for movie_data in premiers_list[:5]:
@@ -261,17 +297,17 @@ class MaxAdapter:
             if movie_details:
                 card_text, _ = format_movie_card(movie_details, is_premiers=True)
                 if card_text:
-                    await event.message.answer(card_text, parse_mode='html')
+                    context.reply(card_text, parse_mode="html")
         
         if len(premiers_list) > 5:
-            await event.message.answer(f"🐾 Нашла {len(premiers_list)} премьер. Показаны первые 5.")
+            context.reply(f"🐾 Нашла {len(premiers_list)} премьер. Показаны первые 5.")
     
-    async def _handle_profile(self, event: MessageCreated):
-        user_id = event.message.sender.user_id
+    def _handle_profile_command(self, context):
+        user_id = context.user_id
         limits = get_user_limits(user_id)
         stats = get_user_stats(user_id, date.today().isoformat())
         
-        await event.message.answer(
+        context.reply(
             f"👤 <b>Твой профиль</b>\n\n"
             f"📊 Тариф: {limits.get('tariff_name', 'Щенячий азарт')}\n"
             f"🎬 Мнений сегодня: {stats.get('opinion_count', 0)}/{limits.get('opinion_limit', 3)}\n"
@@ -280,46 +316,83 @@ class MaxAdapter:
             parse_mode="html"
         )
     
-    async def _handle_opinion_command(self, event: MessageCreated):
-        """Обработка команды /opinion [название или ID]"""
-        user_id = event.message.sender.user_id
-        text = event.message.body.text.replace('/opinion', '').strip()
-        
-        if not text:
-            await event.message.answer(
-                "🐾 Укажи фильм:\n"
-                "• /opinion 435 — по ID Кинопоиска\n"
-                "• /opinion Зеленая миля — по названию"
-            )
+    def _handle_search(self, context, query):
+        if len(query) < 2:
+            context.reply("🐾 Введи хотя бы 2 символа.")
             return
+        
+        context.reply(f"🔍 Ищу: {query}...")
+        
+        movies_list = search_movies_in_db(query, min_rating=0.0, max_rating=10.0)
+        if not movies_list:
+            context.reply(f"😢 По запросу '{query}' ничего не нашлось.")
+            return
+        
+        for movie_data in movies_list[:5]:
+            movie_details = get_movie_details(movie_data['id'])
+            if movie_details:
+                card_text, _ = format_movie_card(movie_details)
+                if card_text:
+                    keyboard = InlineKeyboard([
+                        [{"text": "🐾 Мнение о фильме", "callback": f"opinion_{movie_details['id']}"}]
+                    ])
+                    context.reply(card_text, parse_mode="html", keyboard=keyboard)
+        
+        if len(movies_list) > 5:
+            context.reply(f"🐾 Нашла {len(movies_list)} фильмов. Показаны первые 5.")
+    
+    def _handle_person_search(self, context, query):
+        if len(query) < 2:
+            context.reply("🐾 Введи хотя бы 2 символа.")
+            return
+        
+        context.reply(f"🎭 Ищу фильмы с участием: {query}...")
+        
+        movies_list = search_movies_by_person_in_db(query, min_rating=0.0, max_rating=10.0)
+        if not movies_list:
+            context.reply(f"😢 По запросу '{query}' ничего не нашлось.")
+            return
+        
+        for movie_data in movies_list[:5]:
+            movie_details = get_movie_details(movie_data['id'])
+            if movie_details:
+                card_text, _ = format_movie_card(movie_details, is_person_search=True, query=query)
+                if card_text:
+                    keyboard = InlineKeyboard([
+                        [{"text": "🐾 Мнение о фильме", "callback": f"opinion_{movie_details['id']}"}]
+                    ])
+                    context.reply(card_text, parse_mode="html", keyboard=keyboard)
+        
+        if len(movies_list) > 5:
+            context.reply(f"🐾 Нашла {len(movies_list)} фильмов. Показаны первые 5.")
+    
+    def _handle_opinion(self, context, text):
+        user_id = context.user_id
         
         # Проверяем лимиты
         limits = get_user_limits(user_id)
         stats = get_user_stats(user_id, date.today().isoformat())
         
         if stats['opinion_count'] >= limits['opinion_limit']:
-            await event.message.answer(
+            context.reply(
                 f"🐾 Сегодня я уже высказала {stats['opinion_count']} мнений из {limits['opinion_limit']}.\n"
-                f"Лимит обновится завтра!\n\n"
-                f"Хочешь больше? Подписка снимет ограничения (скоро)."
+                f"Лимит обновится завтра!"
             )
             return
         
         # Ищем фильм
         movie_details = None
         
-        # Пробуем как ID
         if text.isdigit():
             movie_details = get_movie_details(int(text))
         
-        # Если не нашли — ищем по названию
         if not movie_details:
             movies = search_movies_in_db(text, min_rating=0.0, max_rating=10.0)
             if movies:
                 movie_details = get_movie_details(movies[0]['id'])
         
         if not movie_details:
-            await event.message.answer(f"😢 Не нашла фильм '{text}'. Проверь название или ID.")
+            context.reply(f"😢 Не нашла фильм '{text}'. Проверь название или ID.")
             return
         
         movie_id = movie_details['id']
@@ -329,104 +402,70 @@ class MaxAdapter:
         # Проверяем кэш
         cached_opinion = get_cached_opinion(movie_id)
         if cached_opinion:
-            await event.message.answer(
+            context.reply(
                 f"🐾 Я уже смотрела <b>{movie_name}</b> ({movie_year}), вот что думаю:\n\n"
-                f"{cached_opinion}\n\n🐾"
+                f"{cached_opinion}\n\n🐾",
+                parse_mode="html"
             )
-            # Увеличиваем счётчик
             increment_stat_counter(user_id, 'opinion_count')
             record_user_opinion(user_id, movie_id)
             return
         
         # Генерируем новое мнение
-        await event.message.answer(f"🐾 Смотрю <b>{movie_name}</b> ({movie_year}) в ускоренном режиме... 🎬")
+        context.reply(f"🐾 Смотрю <b>{movie_name}</b> ({movie_year}) в ускоренном режиме... 🎬", parse_mode="html")
         
         if not ai_client:
-            await event.message.answer("😢 Генерация мнений временно недоступна. Попробуй позже.")
+            context.reply("😢 Генерация мнений временно недоступна.")
             return
         
         try:
-            opinion = await self._generate_opinion(movie_details)
-            
+            opinion = self._generate_opinion(movie_details)
             if opinion:
-                # Сохраняем в кэш
                 save_opinion_cache(movie_id, opinion)
-                # Увеличиваем счётчик
                 increment_stat_counter(user_id, 'opinion_count')
                 record_user_opinion(user_id, movie_id)
-                
-                await event.message.answer(
+                context.reply(
                     f"🐾 Я посмотрела <b>{movie_name}</b> ({movie_year}), и вот что думаю:\n\n"
-                    f"{opinion}\n\n🐾"
+                    f"{opinion}\n\n🐾",
+                    parse_mode="html"
                 )
             else:
-                await event.message.answer("😢 Не удалось сгенерировать мнение. Попробуй позже.")
-                
+                context.reply("😢 Не удалось сгенерировать мнение.")
         except Exception as e:
-            logger.error(f"Ошибка генерации мнения: {e}")
-            await event.message.answer("🐾 Гав! Кажется, я перегрызла провод... Попробуй позже!")
+            logger.error(f"Ошибка генерации: {e}")
+            context.reply("🐾 Гав! Что-то пошло не так. Попробуй позже!")
     
-    async def _generate_opinion(self, movie_details: dict) -> str:
-        """Генерирует мнение о фильме через DeepSeek"""
-        
+    def _generate_opinion(self, movie_details: dict) -> str:
         title = movie_details.get('name', 'Без названия')
         year = movie_details.get('year', '')
+        countries = ', '.join(movie_details.get('countries', [])) or 'неизвестно'
+        genres = ', '.join(movie_details.get('genres', [])) or 'неизвестно'
         
-        countries = movie_details.get('countries', [])
-        countries_str = ', '.join(countries) if countries else 'неизвестно'
+        directors = movie_details.get('directors', [])
+        directors_str = ', '.join([d.get('name') or d.get('enName') for d in directors[:2]]) or 'неизвестен'
         
-        genres = movie_details.get('genres', [])
-        genres_str = ', '.join(genres) if genres else 'неизвестно'
-        
-        directors_list = movie_details.get('directors', [])
-        if directors_list:
-            director_names = []
-            for director in directors_list[:2]:
-                name = director.get('name') or director.get('enName')
-                if name:
-                    director_names.append(name)
-            directors_str = ', '.join(director_names)
-        else:
-            directors_str = 'неизвестен'
-        
-        actors_list = movie_details.get('actors', [])[:5]
-        if actors_list:
-            actor_names = []
-            for actor in actors_list:
-                name = actor.get('name') or actor.get('enName')
-                if name:
-                    actor_names.append(name)
-            actors_str = ', '.join(actor_names)
-        else:
-            actors_str = 'не указаны'
+        actors = movie_details.get('actors', [])[:5]
+        actors_str = ', '.join([a.get('name') or a.get('enName') for a in actors]) or 'не указаны'
         
         rating = movie_details.get('rating', 0)
-        description = movie_details.get('description', 'Описание отсутствует')
-        if description and len(description) > 600:
-            description = description[:600] + '...'
+        description = movie_details.get('description', 'Описание отсутствует')[:600]
         
-        prompt = f"""Ты — КиноИщейка, собака-девочка, кинокритик с отличным чутьём на хорошее кино.
-Говори о себе в женском роде, с юмором и энтузиазмом.
+        prompt = f"""Ты — КиноИщейка, собака-девочка, кинокритик.
+Говори о себе в женском роде, с юмором.
 
-Информация о фильме:
-🎬 Название: {title} ({year})
-🌍 Страна: {countries_str}
-🎭 Жанр: {genres_str}
-🎥 Режиссер: {directors_str}
-⭐ Рейтинг Кинопоиска: {rating}
-👥 В главных ролях: {actors_str}
+Фильм: {title} ({year})
+Страна: {countries}
+Жанр: {genres}
+Режиссер: {directors_str}
+Актеры: {actors_str}
+Рейтинг: {rating}
 
-📝 Сюжет:
-{description}
+Сюжет: {description}
 
-Требования:
-1. 8-10 предложений, без markdown
-2. Сразу начинай с содержательной части
-3. Расскажи о настроении, смысле, плюсах и минусах
-4. В конце обязательно:
-   Оценка: X/10 (краткий комментарий)
-   Настроение: #Тег1 #Тег2 #Тег3
-   Атмосфера: #Тег1 #Тег2 #Тег3"""
+Напиши мнение (8-10 предложений). В конце:
+Оценка: X/10 (комментарий)
+Настроение: #теги
+Атмосфера: #теги"""
 
         response = ai_client.chat.completions.create(
             model="deepseek-chat",
@@ -436,81 +475,13 @@ class MaxAdapter:
             ],
             timeout=60,
         )
-        
         return response.choices[0].message.content.strip()
     
-    async def _handle_message(self, event: MessageCreated):
-        user_id = event.message.sender.user_id
-        text = event.message.body.text if event.message.body else ""
-        
-        if not text:
-            return
-        
-        context = self.user_context.get(user_id, {})
-        state = context.get('state')
-        
-        if state == 'awaiting_search':
-            await self._perform_search(event, user_id, text)
-        elif state == 'awaiting_person':
-            await self._perform_person_search(event, user_id, text)
-        else:
-            await event.message.answer("🐾 Я не понимаю эту команду.\n\nИспользуй /start для списка команд.")
-    
-    async def _perform_search(self, event: MessageCreated, user_id: int, query: str):
-        if len(query) < 2:
-            await event.message.answer("🐾 Введи хотя бы 2 символа.")
-            self.user_context.pop(user_id, None)
-            return
-        
-        await event.message.answer(f"🔍 Ищу: {query}...")
-        
-        movies_list = search_movies_in_db(query, min_rating=0.0, max_rating=10.0)
-        if not movies_list:
-            await event.message.answer(f"😢 По запросу '{query}' ничего не нашлось.")
-        else:
-            for movie_data in movies_list[:5]:
-                movie_details = get_movie_details(movie_data['id'])
-                if movie_details:
-                    card_text, _ = format_movie_card(movie_details)
-                    if card_text:
-                        await event.message.answer(card_text, parse_mode='html')
-            
-            if len(movies_list) > 5:
-                await event.message.answer(f"🐾 Нашла {len(movies_list)} фильмов. Показаны первые 5.\n\nДля мнения используй /opinion [название]")
-        
-        self.user_context.pop(user_id, None)
-    
-    async def _perform_person_search(self, event: MessageCreated, user_id: int, query: str):
-        if len(query) < 2:
-            await event.message.answer("🐾 Введи хотя бы 2 символа.")
-            self.user_context.pop(user_id, None)
-            return
-        
-        await event.message.answer(f"🎭 Ищу фильмы с участием: {query}...")
-        
-        movies_list = search_movies_by_person_in_db(query, min_rating=0.0, max_rating=10.0)
-        if not movies_list:
-            await event.message.answer(f"😢 По запросу '{query}' ничего не нашлось.")
-        else:
-            for movie_data in movies_list[:5]:
-                movie_details = get_movie_details(movie_data['id'])
-                if movie_details:
-                    card_text, _ = format_movie_card(movie_details, is_person_search=True, query=query)
-                    if card_text:
-                        await event.message.answer(card_text, parse_mode='html')
-            
-            if len(movies_list) > 5:
-                await event.message.answer(f"🐾 Нашла {len(movies_list)} фильмов. Показаны первые 5.\n\nДля мнения используй /opinion [название]")
-        
-        self.user_context.pop(user_id, None)
-    
-    async def run(self):
-        logger.info("🚀 MaxAdapter запущен")
-        await self.bot.delete_webhook()
-        await self.dp.start_polling(self.bot)
+    def run(self):
+        logger.info("🚀 MaxAdapter (maxgram) запущен")
+        self.bot.run()
 
 
 if __name__ == "__main__":
-    import asyncio
     adapter = MaxAdapter()
-    asyncio.run(adapter.run())
+    adapter.run()
