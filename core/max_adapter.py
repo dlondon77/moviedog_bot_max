@@ -28,10 +28,19 @@ except ImportError:
             self.callback_data = callback_data
             self.url = url
 
-# Импорты из core
-from core import user, movie, db
-from core.user import register_user, get_user_limits, get_user_stats
-from core.movie import get_random_movie_from_db, get_movie_details, format_movie_card
+# Импорты из core (исправлено — импортируем модули по отдельности)
+import core.user as user_module
+import core.movie as movie_module
+import core.db as db_module
+
+# Для удобства создаём алиасы
+register_user = user_module.register_user
+get_user_limits = user_module.get_user_limits
+get_user_stats = user_module.get_user_stats
+
+get_random_movie_from_db = movie_module.get_random_movie_from_db
+get_movie_details = movie_module.get_movie_details
+format_movie_card = movie_module.format_movie_card
 
 logger = logging.getLogger(__name__)
 
