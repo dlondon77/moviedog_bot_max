@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-# moviedog_max.py — точка входа для Max
+# moviedog_max.py
 
 import asyncio
 import logging
