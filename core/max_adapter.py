@@ -1,4 +1,4 @@
-# core/max_adapter.py — версия с правильно работающими кнопками!
+# core/max_adapter.py — версия с кнопками через словарь
 
 import logging
 import configparser
@@ -17,8 +17,7 @@ if CORE_DIR not in sys.path:
 logger = logging.getLogger(__name__)
 
 from maxapi import Bot, Dispatcher, F
-from maxapi.filters.command import CommandStart
-from maxapi.types import BotStarted, MessageCreated, InlineKeyboardMarkup, InlineKeyboardButton
+from maxapi.types import BotStarted, MessageCreated
 from openai import OpenAI
 import httpx
 
@@ -94,6 +93,41 @@ else:
     logger.warning("⚠️ OPENAI_API_KEY не найден")
 
 
+# ========== КЛАВИАТУРЫ ЧЕРЕЗ СЛОВАРЬ ==========
+
+# Главное меню
+MAIN_KEYBOARD = {
+    "type": "inline_keyboard",
+    "payload": {
+        "buttons": [
+            [
+                {"type": "callback", "text": "🎲 Случайный фильм", "payload": "random"},
+                {"type": "callback", "text": "🔍 Поиск", "payload": "search"}
+            ],
+            [
+                {"type": "callback", "text": "🎉 Премьеры", "payload": "premiers"},
+                {"type": "callback", "text": "🎭 Поиск по актёрам", "payload": "person"}
+            ],
+            [
+                {"type": "callback", "text": "👤 Мой профиль", "payload": "profile"},
+                {"type": "callback", "text": "🐾 Мнение о фильме", "payload": "opinion_prompt"}
+            ]
+        ]
+    }
+}
+
+# Кнопка мнения под карточкой
+def get_opinion_button(movie_id: int):
+    return {
+        "type": "inline_keyboard",
+        "payload": {
+            "buttons": [
+                [{"type": "callback", "text": "🐾 Мнение о фильме", "payload": f"opinion_{movie_id}"}]
+            ]
+        }
+    }
+
+
 class MaxAdapter:
     def __init__(self):
         self.config = load_config()
@@ -107,7 +141,7 @@ class MaxAdapter:
         self.user_context = {}
         
         self._register_handlers()
-        logger.info(f"✅ MaxAdapter инициализирован с поддержкой кнопок!")
+        logger.info(f"✅ MaxAdapter инициализирован с поддержкой кнопок через словарь!")
     
     def _register_handlers(self):
         # Обработчик нажатия "Начать"
@@ -118,46 +152,46 @@ class MaxAdapter:
                 text="🐾 Привет! Я КиноИщейка!\nНапиши /start"
             )
         
-        # Обработчик /start с клавиатурой
-        @self.dp.message_created(CommandStart())
+        # Обработчик /start
+        @self.dp.message_created(F.message.body.text == "/start")
         async def on_start(event: MessageCreated):
             await self._handle_start(event)
         
-        # Обработчик команды /random
+        # Обработчик /random
         @self.dp.message_created(F.message.body.text == "/random")
         async def on_random(event: MessageCreated):
             await self._handle_random(event)
         
-        # Обработчик команды /search
+        # Обработчик /search
         @self.dp.message_created(F.message.body.text == "/search")
         async def on_search(event: MessageCreated):
             user_id = event.message.sender.user_id
             self.user_context[user_id] = {'state': 'awaiting_search'}
             await event.message.answer("🔍 Введи название фильма:")
         
-        # Обработчик команды /premiers
+        # Обработчик /premiers
         @self.dp.message_created(F.message.body.text == "/premiers")
         async def on_premiers(event: MessageCreated):
             await self._handle_premiers(event)
         
-        # Обработчик команды /person
+        # Обработчик /person
         @self.dp.message_created(F.message.body.text == "/person")
         async def on_person(event: MessageCreated):
             user_id = event.message.sender.user_id
             self.user_context[user_id] = {'state': 'awaiting_person'}
             await event.message.answer("🎭 Введи имя актёра или режиссёра:")
         
-        # Обработчик команды /profile
+        # Обработчик /profile
         @self.dp.message_created(F.message.body.text == "/profile")
         async def on_profile(event: MessageCreated):
             await self._handle_profile(event)
         
-        # Обработчик команды /opinion
+        # Обработчик /opinion
         @self.dp.message_created(F.message.body.text.startswith("/opinion"))
         async def on_opinion(event: MessageCreated):
             await self._handle_opinion_command(event)
         
-        # Обработчик команды /help
+        # Обработчик /help
         @self.dp.message_created(F.message.body.text == "/help")
         async def on_help(event: MessageCreated):
             await event.message.answer(
@@ -173,13 +207,13 @@ class MaxAdapter:
                 parse_mode="html"
             )
         
-        # 👇 ГЛАВНОЕ: Обработчик нажатий на инлайн-кнопки!
+        # 👇 Обработчик нажатий на кнопки!
         @self.dp.message_callback()
         async def on_callback(event):
             await self._handle_callback(event)
         
         # Обработчик обычных сообщений
-        @self.dp.message_created(F.message.body.text)
+        @self.dp.message_created()
         async def on_message(event: MessageCreated):
             await self._handle_message(event)
     
@@ -203,23 +237,13 @@ class MaxAdapter:
         
         limits = get_user_limits(user_id)
         
-        # Клавиатура с кнопками!
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🎲 Случайный фильм", callback_data="random")],
-            [InlineKeyboardButton(text="🔍 Поиск", callback_data="search")],
-            [InlineKeyboardButton(text="🎉 Премьеры", callback_data="premiers")],
-            [InlineKeyboardButton(text="🎭 Поиск по актёрам", callback_data="person")],
-            [InlineKeyboardButton(text="👤 Мой профиль", callback_data="profile")],
-            [InlineKeyboardButton(text="🐾 Мнение о фильме", callback_data="opinion_prompt")],
-        ])
-        
         await event.message.answer(
             f"🐾 <b>Гав! Я КиноИщейка!</b>\n\n"
             f"📊 <b>Твой тариф:</b> {limits.get('tariff_name', 'Щенячий азарт')}\n"
             f"🎬 <b>Мнений сегодня:</b> 0/{limits.get('opinion_limit', 3)}\n\n"
             f"👇 <b>Выбери действие:</b>",
             parse_mode="html",
-            reply_markup=keyboard  # ← кнопки!
+            attachments=[MAIN_KEYBOARD]  # ← КНОПКИ!
         )
     
     async def _handle_callback(self, event):
@@ -228,10 +252,11 @@ class MaxAdapter:
         user_id = event.callback.user.id
         logger.info(f"Callback от {user_id}: {payload}")
         
+        # Обязательно отвечаем на callback
+        await event.callback.answer()
+        
         if payload == "random":
-            # Отвечаем на callback
-            await event.callback.answer()
-            # Имитируем команду /random
+            # Создаём mock-событие для _handle_random
             class MockMessage:
                 sender = event.callback.user
                 async def answer(self, text, **kwargs):
@@ -240,32 +265,29 @@ class MaxAdapter:
             await self._handle_random(mock_event)
         
         elif payload == "search":
-            await event.callback.answer()
             self.user_context[user_id] = {'state': 'awaiting_search'}
             await self.bot.send_message(chat_id=user_id, text="🔍 Введи название фильма:")
         
         elif payload == "premiers":
-            await event.callback.answer()
             await self._handle_premiers_mock(user_id)
         
         elif payload == "person":
-            await event.callback.answer()
             self.user_context[user_id] = {'state': 'awaiting_person'}
             await self.bot.send_message(chat_id=user_id, text="🎭 Введи имя актёра или режиссёра:")
         
         elif payload == "profile":
-            await event.callback.answer()
             await self._handle_profile_mock(user_id)
         
         elif payload == "opinion_prompt":
-            await event.callback.answer()
             self.user_context[user_id] = {'state': 'awaiting_opinion'}
             await self.bot.send_message(chat_id=user_id, text="🐾 Введи ID или название фильма:")
         
         elif payload.startswith("opinion_"):
-            await event.callback.answer()
             movie_id = int(payload.split("_")[1])
             await self._send_opinion_by_id(user_id, movie_id)
+        
+        else:
+            await self.bot.send_message(chat_id=user_id, text=f"🐾 Неизвестная команда: {payload}")
     
     async def _handle_random(self, event: MessageCreated):
         await event.message.answer("🎲 Ищу случайный фильм...")
@@ -283,10 +305,11 @@ class MaxAdapter:
         card_text, _ = format_movie_card(movie_details)
         if card_text:
             # Кнопка под карточкой
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🐾 Мнение о фильме", callback_data=f"opinion_{movie_details['id']}")]
-            ])
-            await event.message.answer(card_text, parse_mode='html', reply_markup=keyboard)
+            await event.message.answer(
+                card_text,
+                parse_mode='html',
+                attachments=[get_opinion_button(movie_details['id'])]  # ← КНОПКА!
+            )
         else:
             await event.message.answer("😢 Не могу показать карточку.")
     
@@ -309,10 +332,11 @@ class MaxAdapter:
             if movie_details:
                 card_text, _ = format_movie_card(movie_details, is_premiers=True)
                 if card_text:
-                    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(text="🐾 Мнение о фильме", callback_data=f"opinion_{movie_details['id']}")]
-                    ])
-                    await send_func(card_text, parse_mode='html', reply_markup=keyboard)
+                    await send_func(
+                        card_text,
+                        parse_mode='html',
+                        attachments=[get_opinion_button(movie_details['id'])]  # ← КНОПКА!
+                    )
         
         if len(premiers_list) > 5:
             await send_func(f"🐾 Нашла {len(premiers_list)} премьер. Показаны первые 5.")
@@ -495,10 +519,11 @@ class MaxAdapter:
                 if movie_details:
                     card_text, _ = format_movie_card(movie_details)
                     if card_text:
-                        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                            [InlineKeyboardButton(text="🐾 Мнение о фильме", callback_data=f"opinion_{movie_details['id']}")]
-                        ])
-                        await event.message.answer(card_text, parse_mode='html', reply_markup=keyboard)
+                        await event.message.answer(
+                            card_text,
+                            parse_mode='html',
+                            attachments=[get_opinion_button(movie_details['id'])]  # ← КНОПКА!
+                        )
             
             if len(movies_list) > 5:
                 await event.message.answer(f"🐾 Нашла {len(movies_list)} фильмов. Показаны первые 5.")
@@ -522,10 +547,11 @@ class MaxAdapter:
                 if movie_details:
                     card_text, _ = format_movie_card(movie_details, is_person_search=True, query=query)
                     if card_text:
-                        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                            [InlineKeyboardButton(text="🐾 Мнение о фильме", callback_data=f"opinion_{movie_details['id']}")]
-                        ])
-                        await event.message.answer(card_text, parse_mode='html', reply_markup=keyboard)
+                        await event.message.answer(
+                            card_text,
+                            parse_mode='html',
+                            attachments=[get_opinion_button(movie_details['id'])]  # ← КНОПКА!
+                        )
             
             if len(movies_list) > 5:
                 await event.message.answer(f"🐾 Нашла {len(movies_list)} фильмов. Показаны первые 5.")
@@ -533,7 +559,7 @@ class MaxAdapter:
         self.user_context.pop(user_id, None)
     
     async def run(self):
-        logger.info("🚀 MaxAdapter запущен с поддержкой кнопок!")
+        logger.info("🚀 MaxAdapter запущен с поддержкой кнопок через словарь!")
         await self.bot.delete_webhook()
         await self.dp.start_polling(self.bot)
 
