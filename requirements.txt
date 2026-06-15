@@ -1,5 +1,6 @@
 maxapi
 maxbot
+maxgram
 openai
 aiohttp
 httpx
