@@ -7,14 +7,18 @@ import logging
 import configparser
 import os
 import sys
-from datetime import datetime
 
-# Добавляем корневую директорию в путь
+# ===== ВАЖНО: Добавляем путь к папке core ДО всех импортов =====
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CORE_DIR = os.path.join(BASE_DIR, 'core')
+
+# Добавляем оба пути
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
+if CORE_DIR not in sys.path:
+    sys.path.insert(0, CORE_DIR)
 
-# Импорты из maxapi
+# Теперь можно импортировать напрямую (без core. префикса)
 from maxapi import Bot, Dispatcher
 from maxapi.types import BotStarted, Command, MessageCreated
 
@@ -32,10 +36,10 @@ except ImportError:
             self.callback_data = callback_data
             self.url = url
 
-# Импорты из core — через as (работает с пустым __init__.py)
-import core.user as user_module
-import core.movie as movie_module
-import core.db as db_module
+# ===== Импорты из core (теперь напрямую, так как CORE_DIR в sys.path) =====
+import user as user_module
+import movie as movie_module
+import db as db_module
 
 # Алиасы для удобства
 register_user = user_module.register_user
@@ -86,6 +90,7 @@ class MaxAdapter:
         
         logger.info(f"✅ MaxAdapter инициализирован")
         logger.info(f"   Token: {self.token[:10]}...")
+        logger.info(f"   CORE_DIR: {CORE_DIR}")
     
     def _register_handlers(self):
         """Регистрирует обработчики"""
@@ -202,7 +207,7 @@ class MaxAdapter:
             if not movies_list:
                 await event.message.answer(f"😢 По запросу '{query}' ничего не нашлось.")
             else:
-                for movie_data in movies_list[:5]:  # Показываем первые 5
+                for movie_data in movies_list[:5]:
                     movie_details = get_movie_details(movie_data['id'])
                     if movie_details:
                         card_text, _ = format_movie_card(movie_details)
@@ -212,7 +217,6 @@ class MaxAdapter:
                 if len(movies_list) > 5:
                     await event.message.answer(f"🐾 Нашла {len(movies_list)} фильмов. Показаны первые 5.")
             
-            # Очищаем контекст
             self.user_context.pop(user_id, None)
     
     async def run(self):
@@ -220,9 +224,3 @@ class MaxAdapter:
         logger.info("🚀 MaxAdapter запущен")
         await self.bot.delete_webhook()
         await self.dp.start_polling(self.bot)
-
-
-if __name__ == "__main__":
-    import asyncio
-    adapter = MaxAdapter()
-    asyncio.run(adapter.run())
