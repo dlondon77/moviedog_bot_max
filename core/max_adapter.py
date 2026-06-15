@@ -1,4 +1,4 @@
-# core/max_adapter.py — версия с кнопками через словарь
+# core/max_adapter.py — стабильная рабочая версия
 
 import logging
 import configparser
@@ -93,41 +93,6 @@ else:
     logger.warning("⚠️ OPENAI_API_KEY не найден")
 
 
-# ========== КЛАВИАТУРЫ ЧЕРЕЗ СЛОВАРЬ ==========
-
-# Главное меню
-MAIN_KEYBOARD = {
-    "type": "inline_keyboard",
-    "payload": {
-        "buttons": [
-            [
-                {"type": "callback", "text": "🎲 Случайный фильм", "payload": "random"},
-                {"type": "callback", "text": "🔍 Поиск", "payload": "search"}
-            ],
-            [
-                {"type": "callback", "text": "🎉 Премьеры", "payload": "premiers"},
-                {"type": "callback", "text": "🎭 Поиск по актёрам", "payload": "person"}
-            ],
-            [
-                {"type": "callback", "text": "👤 Мой профиль", "payload": "profile"},
-                {"type": "callback", "text": "🐾 Мнение о фильме", "payload": "opinion_prompt"}
-            ]
-        ]
-    }
-}
-
-# Кнопка мнения под карточкой
-def get_opinion_button(movie_id: int):
-    return {
-        "type": "inline_keyboard",
-        "payload": {
-            "buttons": [
-                [{"type": "callback", "text": "🐾 Мнение о фильме", "payload": f"opinion_{movie_id}"}]
-            ]
-        }
-    }
-
-
 class MaxAdapter:
     def __init__(self):
         self.config = load_config()
@@ -141,10 +106,9 @@ class MaxAdapter:
         self.user_context = {}
         
         self._register_handlers()
-        logger.info(f"✅ MaxAdapter инициализирован с поддержкой кнопок через словарь!")
+        logger.info(f"✅ MaxAdapter инициализирован (рабочая версия без кнопок)")
     
     def _register_handlers(self):
-        # Обработчик нажатия "Начать"
         @self.dp.bot_started()
         async def on_bot_started(event: BotStarted):
             await self.bot.send_message(
@@ -152,67 +116,53 @@ class MaxAdapter:
                 text="🐾 Привет! Я КиноИщейка!\nНапиши /start"
             )
         
-        # Обработчик /start
         @self.dp.message_created(F.message.body.text == "/start")
         async def on_start(event: MessageCreated):
             await self._handle_start(event)
         
-        # Обработчик /random
         @self.dp.message_created(F.message.body.text == "/random")
         async def on_random(event: MessageCreated):
             await self._handle_random(event)
         
-        # Обработчик /search
         @self.dp.message_created(F.message.body.text == "/search")
         async def on_search(event: MessageCreated):
             user_id = event.message.sender.user_id
             self.user_context[user_id] = {'state': 'awaiting_search'}
             await event.message.answer("🔍 Введи название фильма:")
         
-        # Обработчик /premiers
         @self.dp.message_created(F.message.body.text == "/premiers")
         async def on_premiers(event: MessageCreated):
             await self._handle_premiers(event)
         
-        # Обработчик /person
         @self.dp.message_created(F.message.body.text == "/person")
         async def on_person(event: MessageCreated):
             user_id = event.message.sender.user_id
             self.user_context[user_id] = {'state': 'awaiting_person'}
             await event.message.answer("🎭 Введи имя актёра или режиссёра:")
         
-        # Обработчик /profile
         @self.dp.message_created(F.message.body.text == "/profile")
         async def on_profile(event: MessageCreated):
             await self._handle_profile(event)
         
-        # Обработчик /opinion
         @self.dp.message_created(F.message.body.text.startswith("/opinion"))
         async def on_opinion(event: MessageCreated):
             await self._handle_opinion_command(event)
         
-        # Обработчик /help
         @self.dp.message_created(F.message.body.text == "/help")
         async def on_help(event: MessageCreated):
             await event.message.answer(
                 "❓ <b>Команды:</b>\n\n"
-                "/start — главное меню\n"
+                "/start — приветствие\n"
                 "/random — случайный фильм\n"
                 "/search — поиск по названию\n"
                 "/premiers — ожидаемые премьеры\n"
-                "/person — поиск по актёрам\n"
-                "/opinion [название] — мнение о фильме\n"
+                "/person — поиск по актёрам/режиссёрам\n"
+                "/opinion [название или ID] — мнение о фильме\n"
                 "/profile — мой профиль\n"
                 "/help — это сообщение",
                 parse_mode="html"
             )
         
-        # 👇 Обработчик нажатий на кнопки!
-        @self.dp.message_callback()
-        async def on_callback(event):
-            await self._handle_callback(event)
-        
-        # Обработчик обычных сообщений
         @self.dp.message_created()
         async def on_message(event: MessageCreated):
             await self._handle_message(event)
@@ -241,53 +191,16 @@ class MaxAdapter:
             f"🐾 <b>Гав! Я КиноИщейка!</b>\n\n"
             f"📊 <b>Твой тариф:</b> {limits.get('tariff_name', 'Щенячий азарт')}\n"
             f"🎬 <b>Мнений сегодня:</b> 0/{limits.get('opinion_limit', 3)}\n\n"
-            f"👇 <b>Выбери действие:</b>",
-            parse_mode="html",
-            attachments=[MAIN_KEYBOARD]  # ← КНОПКИ!
+            f"👇 <b>Команды:</b>\n"
+            f"• /random — случайный фильм\n"
+            f"• /search — поиск по названию\n"
+            f"• /premiers — ожидаемые премьеры\n"
+            f"• /person — поиск по актёрам/режиссёрам\n"
+            f"• /opinion [название] — мнение о фильме\n"
+            f"• /profile — мой профиль\n"
+            f"• /help — помощь",
+            parse_mode="html"
         )
-    
-    async def _handle_callback(self, event):
-        """Обработка нажатий на кнопки"""
-        payload = event.callback.payload
-        user_id = event.callback.user.id
-        logger.info(f"Callback от {user_id}: {payload}")
-        
-        # Обязательно отвечаем на callback
-        await event.callback.answer()
-        
-        if payload == "random":
-            # Создаём mock-событие для _handle_random
-            class MockMessage:
-                sender = event.callback.user
-                async def answer(self, text, **kwargs):
-                    await self.bot.send_message(chat_id=user_id, text=text, **kwargs)
-            mock_event = type('obj', (object,), {'message': MockMessage()})()
-            await self._handle_random(mock_event)
-        
-        elif payload == "search":
-            self.user_context[user_id] = {'state': 'awaiting_search'}
-            await self.bot.send_message(chat_id=user_id, text="🔍 Введи название фильма:")
-        
-        elif payload == "premiers":
-            await self._handle_premiers_mock(user_id)
-        
-        elif payload == "person":
-            self.user_context[user_id] = {'state': 'awaiting_person'}
-            await self.bot.send_message(chat_id=user_id, text="🎭 Введи имя актёра или режиссёра:")
-        
-        elif payload == "profile":
-            await self._handle_profile_mock(user_id)
-        
-        elif payload == "opinion_prompt":
-            self.user_context[user_id] = {'state': 'awaiting_opinion'}
-            await self.bot.send_message(chat_id=user_id, text="🐾 Введи ID или название фильма:")
-        
-        elif payload.startswith("opinion_"):
-            movie_id = int(payload.split("_")[1])
-            await self._send_opinion_by_id(user_id, movie_id)
-        
-        else:
-            await self.bot.send_message(chat_id=user_id, text=f"🐾 Неизвестная команда: {payload}")
     
     async def _handle_random(self, event: MessageCreated):
         await event.message.answer("🎲 Ищу случайный фильм...")
@@ -304,27 +217,16 @@ class MaxAdapter:
         
         card_text, _ = format_movie_card(movie_details)
         if card_text:
-            # Кнопка под карточкой
-            await event.message.answer(
-                card_text,
-                parse_mode='html',
-                attachments=[get_opinion_button(movie_details['id'])]  # ← КНОПКА!
-            )
+            await event.message.answer(card_text, parse_mode='html')
         else:
             await event.message.answer("😢 Не могу показать карточку.")
     
     async def _handle_premiers(self, event: MessageCreated):
-        await self._send_premiers(event.message.answer)
-    
-    async def _handle_premiers_mock(self, user_id: int):
-        await self._send_premiers(lambda text, **kwargs: self.bot.send_message(chat_id=user_id, text=text, **kwargs))
-    
-    async def _send_premiers(self, send_func):
-        await send_func("🎉 Ищу ожидаемые премьеры...")
+        await event.message.answer("🎉 Ищу ожидаемые премьеры...")
         
         premiers_list = get_premier_movies_from_db()
         if not premiers_list:
-            await send_func("😢 Сейчас нет ожидаемых премьер.")
+            await event.message.answer("😢 Сейчас нет ожидаемых премьер.")
             return
         
         for movie_data in premiers_list[:5]:
@@ -332,26 +234,17 @@ class MaxAdapter:
             if movie_details:
                 card_text, _ = format_movie_card(movie_details, is_premiers=True)
                 if card_text:
-                    await send_func(
-                        card_text,
-                        parse_mode='html',
-                        attachments=[get_opinion_button(movie_details['id'])]  # ← КНОПКА!
-                    )
+                    await event.message.answer(card_text, parse_mode='html')
         
         if len(premiers_list) > 5:
-            await send_func(f"🐾 Нашла {len(premiers_list)} премьер. Показаны первые 5.")
+            await event.message.answer(f"🐾 Нашла {len(premiers_list)} премьер. Показаны первые 5.")
     
     async def _handle_profile(self, event: MessageCreated):
-        await self._send_profile(event.message.answer, event.message.sender.user_id)
-    
-    async def _handle_profile_mock(self, user_id: int):
-        await self._send_profile(lambda text, **kwargs: self.bot.send_message(chat_id=user_id, text=text, **kwargs), user_id)
-    
-    async def _send_profile(self, send_func, user_id: int):
+        user_id = event.message.sender.user_id
         limits = get_user_limits(user_id)
         stats = get_user_stats(user_id, date.today().isoformat())
         
-        await send_func(
+        await event.message.answer(
             f"👤 <b>Твой профиль</b>\n\n"
             f"📊 Тариф: {limits.get('tariff_name', 'Щенячий азарт')}\n"
             f"🎬 Мнений сегодня: {stats.get('opinion_count', 0)}/{limits.get('opinion_limit', 3)}\n"
@@ -372,34 +265,29 @@ class MaxAdapter:
             )
             return
         
-        await self._process_opinion(user_id, text, event.message.answer)
-    
-    async def _send_opinion_by_id(self, user_id: int, movie_id: int):
-        await self._process_opinion(user_id, str(movie_id), lambda text, **kwargs: self.bot.send_message(chat_id=user_id, text=text, **kwargs))
-    
-    async def _process_opinion(self, user_id: int, query: str, send_func):
         limits = get_user_limits(user_id)
         stats = get_user_stats(user_id, date.today().isoformat())
         
         if stats['opinion_count'] >= limits['opinion_limit']:
-            await send_func(
+            await event.message.answer(
                 f"🐾 Сегодня я уже высказала {stats['opinion_count']} мнений из {limits['opinion_limit']}.\n"
-                f"Лимит обновится завтра!"
+                f"Лимит обновится завтра!\n\n"
+                f"Хочешь больше? Подписка снимет ограничения (скоро)."
             )
             return
         
         movie_details = None
         
-        if query.isdigit():
-            movie_details = get_movie_details(int(query))
+        if text.isdigit():
+            movie_details = get_movie_details(int(text))
         
         if not movie_details:
-            movies = search_movies_in_db(query, min_rating=0.0, max_rating=10.0)
+            movies = search_movies_in_db(text, min_rating=0.0, max_rating=10.0)
             if movies:
                 movie_details = get_movie_details(movies[0]['id'])
         
         if not movie_details:
-            await send_func(f"😢 Не нашла фильм '{query}'. Проверь название или ID.")
+            await event.message.answer(f"😢 Не нашла фильм '{text}'. Проверь название или ID.")
             return
         
         movie_id = movie_details['id']
@@ -408,7 +296,7 @@ class MaxAdapter:
         
         cached_opinion = get_cached_opinion(movie_id)
         if cached_opinion:
-            await send_func(
+            await event.message.answer(
                 f"🐾 Я уже смотрела <b>{movie_name}</b> ({movie_year}), вот что думаю:\n\n"
                 f"{cached_opinion}\n\n🐾",
                 parse_mode="html"
@@ -417,10 +305,10 @@ class MaxAdapter:
             record_user_opinion(user_id, movie_id)
             return
         
-        await send_func(f"🐾 Смотрю <b>{movie_name}</b> ({movie_year}) в ускоренном режиме... 🎬", parse_mode="html")
+        await event.message.answer(f"🐾 Смотрю <b>{movie_name}</b> ({movie_year}) в ускоренном режиме... 🎬", parse_mode="html")
         
         if not ai_client:
-            await send_func("😢 Генерация мнений временно недоступна.")
+            await event.message.answer("😢 Генерация мнений временно недоступна. Попробуй позже.")
             return
         
         try:
@@ -429,16 +317,16 @@ class MaxAdapter:
                 save_opinion_cache(movie_id, opinion)
                 increment_stat_counter(user_id, 'opinion_count')
                 record_user_opinion(user_id, movie_id)
-                await send_func(
+                await event.message.answer(
                     f"🐾 Я посмотрела <b>{movie_name}</b> ({movie_year}), и вот что думаю:\n\n"
                     f"{opinion}\n\n🐾",
                     parse_mode="html"
                 )
             else:
-                await send_func("😢 Не удалось сгенерировать мнение.")
+                await event.message.answer("😢 Не удалось сгенерировать мнение.")
         except Exception as e:
             logger.error(f"Ошибка генерации: {e}")
-            await send_func("🐾 Гав! Что-то пошло не так. Попробуй позже!")
+            await event.message.answer("🐾 Гав! Что-то пошло не так. Попробуй позже!")
     
     async def _generate_opinion(self, movie_details: dict) -> str:
         title = movie_details.get('name', 'Без названия')
@@ -496,11 +384,8 @@ class MaxAdapter:
             await self._perform_search(event, user_id, text)
         elif state == 'awaiting_person':
             await self._perform_person_search(event, user_id, text)
-        elif state == 'awaiting_opinion':
-            await self._process_opinion(user_id, text, event.message.answer)
-            self.user_context.pop(user_id, None)
         else:
-            await event.message.answer("🐾 Я не понимаю эту команду.\n\nИспользуй /start для меню.")
+            await event.message.answer("🐾 Я не понимаю эту команду.\n\nИспользуй /start для списка команд.")
     
     async def _perform_search(self, event: MessageCreated, user_id: int, query: str):
         if len(query) < 2:
@@ -519,14 +404,10 @@ class MaxAdapter:
                 if movie_details:
                     card_text, _ = format_movie_card(movie_details)
                     if card_text:
-                        await event.message.answer(
-                            card_text,
-                            parse_mode='html',
-                            attachments=[get_opinion_button(movie_details['id'])]  # ← КНОПКА!
-                        )
+                        await event.message.answer(card_text, parse_mode='html')
             
             if len(movies_list) > 5:
-                await event.message.answer(f"🐾 Нашла {len(movies_list)} фильмов. Показаны первые 5.")
+                await event.message.answer(f"🐾 Нашла {len(movies_list)} фильмов. Показаны первые 5.\n\nДля мнения используй /opinion [название]")
         
         self.user_context.pop(user_id, None)
     
@@ -547,19 +428,15 @@ class MaxAdapter:
                 if movie_details:
                     card_text, _ = format_movie_card(movie_details, is_person_search=True, query=query)
                     if card_text:
-                        await event.message.answer(
-                            card_text,
-                            parse_mode='html',
-                            attachments=[get_opinion_button(movie_details['id'])]  # ← КНОПКА!
-                        )
+                        await event.message.answer(card_text, parse_mode='html')
             
             if len(movies_list) > 5:
-                await event.message.answer(f"🐾 Нашла {len(movies_list)} фильмов. Показаны первые 5.")
+                await event.message.answer(f"🐾 Нашла {len(movies_list)} фильмов. Показаны первые 5.\n\nДля мнения используй /opinion [название]")
         
         self.user_context.pop(user_id, None)
     
     async def run(self):
-        logger.info("🚀 MaxAdapter запущен с поддержкой кнопок через словарь!")
+        logger.info("🚀 MaxAdapter запущен (рабочая версия)")
         await self.bot.delete_webhook()
         await self.dp.start_polling(self.bot)
 
