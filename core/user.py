@@ -97,7 +97,6 @@ def get_user_limits(user_id):
             'tariff_end_date': (datetime.now() + timedelta(days=365*100)).isoformat()
         }
 
-
 def get_user_stats(user_id, date_str=None):
     """Возвращает статистику использования за указанную дату"""
     if date_str is None:
@@ -139,7 +138,6 @@ def get_user_stats(user_id, date_str=None):
     conn.close()
     return stats
 
-
 def increment_stat_counter(user_id, counter_name):
     """Увеличивает счетчик статистики для пользователя"""
     today = date.today().isoformat()
@@ -170,7 +168,6 @@ def increment_stat_counter(user_id, counter_name):
     conn.commit()
     conn.close()
 
-
 def record_user_opinion(user_id, movie_id):
     """Записывает факт просмотра мнения пользователем"""
     conn = db.get_opinions_db_connection()
@@ -181,7 +178,6 @@ def record_user_opinion(user_id, movie_id):
     ''', (user_id, movie_id, datetime.now().isoformat()))
     conn.commit()
     conn.close()
-
 
 def is_admin(user_id):
     """Проверяет, является ли пользователь админом"""
