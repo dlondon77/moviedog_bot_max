@@ -3,26 +3,20 @@
 
 import asyncio
 import logging
-import os
 import sys
+import os
 
-# Добавляем корневую директорию в путь
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from core.max_adapter import MaxAdapter
 
-# Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 
-MAX_TOKEN = os.environ.get("MAX_TOKEN", "")
-if not MAX_TOKEN:
-    raise ValueError("MAX_TOKEN не задан!")
-
 async def main():
-    adapter = MaxAdapter(MAX_TOKEN)
+    adapter = MaxAdapter()
     await adapter.run()
 
 if __name__ == "__main__":
