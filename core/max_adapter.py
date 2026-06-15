@@ -1,4 +1,4 @@
-# core/max_adapter.py — рабочая версия + пробуем добавить кнопку
+# core/max_adapter.py — рабочая версия
 
 import logging
 import configparser
@@ -12,6 +12,9 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 if CORE_DIR not in sys.path:
     sys.path.insert(0, CORE_DIR)
+
+# Настраиваем логгер ДО использования
+logger = logging.getLogger(__name__)
 
 from maxapi import Bot, Dispatcher
 from maxapi.types import BotStarted, Command, MessageCreated
@@ -35,6 +38,7 @@ except ImportError:
     HAS_KEYBOARD = False
     logger.warning("⚠️ InlineKeyboard НЕ поддерживается, используем заглушки")
 
+# Импорты из core
 import user as user_module
 import movie as movie_module
 
@@ -46,8 +50,6 @@ format_movie_card = movie_module.format_movie_card
 search_movies_in_db = movie_module.search_movies_in_db
 search_movies_by_person_in_db = movie_module.search_movies_by_person_in_db
 get_premier_movies_from_db = movie_module.get_premier_movies_from_db
-
-logger = logging.getLogger(__name__)
 
 
 def load_config():
@@ -123,14 +125,14 @@ class MaxAdapter:
                 parse_mode="html"
             )
         
-        # 👇 ПРОБУЕМ ОБРАБОТЧИК ДЛЯ КНОПОК (если поддерживается)
+        # Пробуем добавить обработчик callback (если есть в версии)
         if hasattr(self.dp, 'callback_query'):
             @self.dp.callback_query()
             async def on_callback(event):
                 await self._handle_callback(event)
             logger.info("✅ Зарегистрирован обработчик callback_query")
         else:
-            logger.warning("⚠️ callback_query не поддерживается в этой версии maxapi")
+            logger.info("ℹ️ callback_query не поддерживается в этой версии maxapi")
         
         @self.dp.message_created()
         async def on_message(event: MessageCreated):
@@ -156,19 +158,6 @@ class MaxAdapter:
         
         limits = get_user_limits(user_id)
         
-        # Пробуем отправить клавиатуру с кнопками
-        keyboard = None
-        if HAS_KEYBOARD:
-            try:
-                keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                    [InlineKeyboardButton(text="🎲 Случайный фильм", callback_data="random")],
-                    [InlineKeyboardButton(text="🔍 Поиск", callback_data="search")],
-                    [InlineKeyboardButton(text="🎉 Премьеры", callback_data="premiers")],
-                ])
-            except Exception as e:
-                logger.error(f"Ошибка создания клавиатуры: {e}")
-                keyboard = None
-        
         welcome_text = (
             f"🐾 <b>Гав! Я КиноИщейка!</b>\n\n"
             f"📊 <b>Твой тариф:</b> {limits.get('tariff_name', 'Щенячий азарт')}\n"
@@ -182,11 +171,7 @@ class MaxAdapter:
             f"• /help — помощь"
         )
         
-        await event.message.answer(
-            welcome_text,
-            parse_mode="html",
-            reply_markup=keyboard  # пробуем отправить с клавиатурой
-        )
+        await event.message.answer(welcome_text, parse_mode="html")
     
     async def _handle_random(self, event: MessageCreated):
         user_id = event.message.sender.user_id
@@ -205,8 +190,7 @@ class MaxAdapter:
         card_text, _ = format_movie_card(movie_details)
         
         if card_text:
-            # 👇 ПРОБУЕМ ДОБАВИТЬ КНОПКУ ПОД КАРТОЧКОЙ
-            keyboard = None
+            # Пробуем добавить кнопку только если поддерживается
             if HAS_KEYBOARD:
                 try:
                     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -215,14 +199,13 @@ class MaxAdapter:
                             callback_data=f"opinion:{movie_details['id']}"
                         )]
                     ])
+                    await event.message.answer(card_text, parse_mode='html', reply_markup=keyboard)
+                    return
                 except Exception as e:
-                    logger.error(f"Ошибка создания кнопки мнения: {e}")
+                    logger.error(f"Ошибка создания кнопки: {e}")
             
-            await event.message.answer(
-                card_text,
-                parse_mode='html',
-                reply_markup=keyboard
-            )
+            # Если кнопки не поддерживаются или ошибка
+            await event.message.answer(card_text, parse_mode='html')
         else:
             await event.message.answer("😢 Не могу показать карточку.")
     
@@ -240,24 +223,7 @@ class MaxAdapter:
             if movie_details:
                 card_text, _ = format_movie_card(movie_details, is_premiers=True)
                 if card_text:
-                    # 👇 ТОЖЕ ДОБАВЛЯЕМ КНОПКУ
-                    keyboard = None
-                    if HAS_KEYBOARD:
-                        try:
-                            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                                [InlineKeyboardButton(
-                                    text="🐾 Мнение КиноИщейки", 
-                                    callback_data=f"opinion:{movie_details['id']}"
-                                )]
-                            ])
-                        except Exception:
-                            pass
-                    
-                    await event.message.answer(
-                        card_text,
-                        parse_mode='html',
-                        reply_markup=keyboard
-                    )
+                    await event.message.answer(card_text, parse_mode='html')
         
         if len(premiers_list) > 5:
             await event.message.answer(f"🐾 Нашла {len(premiers_list)} премьер. Показаны первые 5.")
@@ -309,27 +275,10 @@ class MaxAdapter:
                 if movie_details:
                     card_text, _ = format_movie_card(movie_details)
                     if card_text:
-                        # 👇 ТОЖЕ КНОПКА
-                        keyboard = None
-                        if HAS_KEYBOARD:
-                            try:
-                                keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                                    [InlineKeyboardButton(
-                                        text="🐾 Мнение КиноИщейки", 
-                                        callback_data=f"opinion:{movie_details['id']}"
-                                    )]
-                                ])
-                            except Exception:
-                                pass
-                        
-                        await event.message.answer(
-                            card_text,
-                            parse_mode='html',
-                            reply_markup=keyboard
-                        )
+                        await event.message.answer(card_text, parse_mode='html')
             
             if len(movies_list) > 5:
-                await event.message.answer(f"🐾 Нашла {len(movies_list)} фильмов. Показаны первые 5.\n\nДля более точного поиска введи /search и уточни запрос.")
+                await event.message.answer(f"🐾 Нашла {len(movies_list)} фильмов. Показаны первые 5.")
         
         self.user_context.pop(user_id, None)
     
@@ -350,59 +299,35 @@ class MaxAdapter:
                 if movie_details:
                     card_text, _ = format_movie_card(movie_details, is_person_search=True, query=query)
                     if card_text:
-                        # 👇 ТОЖЕ КНОПКА
-                        keyboard = None
-                        if HAS_KEYBOARD:
-                            try:
-                                keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                                    [InlineKeyboardButton(
-                                        text="🐾 Мнение КиноИщейки", 
-                                        callback_data=f"opinion:{movie_details['id']}"
-                                    )]
-                                ])
-                            except Exception:
-                                pass
-                        
-                        await event.message.answer(
-                            card_text,
-                            parse_mode='html',
-                            reply_markup=keyboard
-                        )
+                        await event.message.answer(card_text, parse_mode='html')
             
             if len(movies_list) > 5:
-                await event.message.answer(f"🐾 Нашла {len(movies_list)} фильмов. Показаны первые 5.\n\nДля более точного поиска введи /person и уточни запрос.")
+                await event.message.answer(f"🐾 Нашла {len(movies_list)} фильмов. Показаны первые 5.")
         
         self.user_context.pop(user_id, None)
     
-    # 👇 ОБРАБОТЧИК ДЛЯ НАЖАТИЙ НА КНОПКИ (экспериментальный)
     async def _handle_callback(self, event):
-        """Обработчик нажатий на инлайн-кнопки"""
+        """Обработчик нажатий на инлайн-кнопки (если поддерживается)"""
         try:
-            # Пробуем получить данные из callback
+            # Пробуем получить данные
             data = None
-            if hasattr(event, 'payload'):
-                data = event.payload
-            elif hasattr(event, 'data'):
+            if hasattr(event, 'data'):
                 data = event.data
-            else:
-                logger.warning(f"Не могу получить payload из callback: {dir(event)}")
-                return
+            elif hasattr(event, 'payload'):
+                data = event.payload
             
-            user_id = event.sender.user_id if hasattr(event, 'sender') else event.user.id
-            logger.info(f"Callback от {user_id}: {data}")
-            
-            if data and data.startswith("opinion:"):
-                movie_id = data.split(":")[1]
-                await event.message.answer(f"🐾 Мнение о фильме ID:{movie_id} — функция в разработке!")
-            elif data == "random":
-                await event.message.answer("🎲 Используй команду /random")
-            elif data == "search":
-                await event.message.answer("🔍 Используй команду /search")
-            elif data == "premiers":
-                await event.message.answer("🎉 Используй команду /premiers")
-            else:
-                await event.message.answer(f"🐾 Нажата кнопка: {data}")
+            if data:
+                logger.info(f"Callback получен: {data}")
+                # Отвечаем на callback, чтобы убрать "часики"
+                if hasattr(event, 'answer'):
+                    await event.answer()
                 
+                if data.startswith("opinion:"):
+                    movie_id = data.split(":")[1]
+                    # Здесь будет генерация мнения
+                    await event.message.answer(f"🐾 Мнение о фильме ID:{movie_id} — скоро появится!")
+                else:
+                    await event.message.answer(f"🐾 Нажата кнопка: {data}")
         except Exception as e:
             logger.error(f"Ошибка в обработчике callback: {e}")
     
