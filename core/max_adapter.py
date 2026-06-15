@@ -1,8 +1,4 @@
-# core/max_adapter.py
-"""
-Адаптер для Max с использованием библиотеки maxbot
-Поддерживает инлайн-кнопки, callback'и и полную пагинацию
-"""
+# core/max_adapter.py — версия на maxapi (без кнопок, но работает)
 
 import logging
 import configparser
@@ -17,14 +13,19 @@ if BASE_DIR not in sys.path:
 if CORE_DIR not in sys.path:
     sys.path.insert(0, CORE_DIR)
 
-from maxbot.bot import Bot
-from maxbot.dispatcher import Dispatcher
-from maxbot.types import (
-    Message, 
-    CallbackQuery,
-    InlineKeyboardMarkup, 
-    InlineKeyboardButton
-)
+from maxapi import Bot, Dispatcher
+from maxapi.types import BotStarted, Command, MessageCreated
+
+# Импорты клавиатуры — заглушки
+class InlineKeyboardMarkup:
+    def __init__(self, inline_keyboard=None):
+        self.inline_keyboard = inline_keyboard or []
+
+class InlineKeyboardButton:
+    def __init__(self, text, callback_data=None, url=None):
+        self.text = text
+        self.callback_data = callback_data
+        self.url = url
 
 import user as user_module
 import movie as movie_module
@@ -56,85 +57,72 @@ class MaxAdapter:
         if not self.token:
             raise ValueError("MAX_TOKEN не найден!")
         
-        self.bot = Bot(self.token)
-        self.dp = Dispatcher(self.bot)
-        self.user_context = {}  # {user_id: {'state': ..., 'query': ..., 'movies': ..., 'page': ...}}
+        self.bot = Bot(token=self.token)
+        self.dp = Dispatcher()
+        self.user_context = {}
         
         self._register_handlers()
-        logger.info(f"✅ MaxAdapter (maxbot) инициализирован. Token: {self.token[:10]}...")
+        logger.info(f"✅ MaxAdapter (maxapi) инициализирован")
     
     def _register_handlers(self):
-        """Регистрирует все обработчики"""
+        @self.dp.bot_started()
+        async def on_bot_started(event: BotStarted):
+            await event.bot.send_message(
+                chat_id=event.chat_id,
+                text="🐾 Привет! Я КиноИщейка!\nНапиши /start"
+            )
         
-        # ===== КОМАНДЫ =====
-        @self.dp.message(lambda m: m.text == "/start")
-        async def on_start(message: Message):
-            await self._handle_start(message)
+        @self.dp.message_created(Command("start"))
+        async def on_start(event: MessageCreated):
+            await self._handle_start(event)
         
-        @self.dp.message(lambda m: m.text == "/random")
-        async def on_random(message: Message):
-            await self._handle_random(message)
+        @self.dp.message_created(Command("random"))
+        async def on_random(event: MessageCreated):
+            await self._handle_random(event)
         
-        @self.dp.message(lambda m: m.text == "/search")
-        async def on_search(message: Message):
-            user_id = message.sender.id
+        @self.dp.message_created(Command("search"))
+        async def on_search(event: MessageCreated):
+            user_id = event.message.sender.user_id
             self.user_context[user_id] = {'state': 'awaiting_search'}
-            await self.bot.send_message(
-                chat_id=user_id,
-                text="🔍 Введи название фильма для поиска:"
-            )
+            await event.message.answer("🔍 Введи название фильма:")
         
-        @self.dp.message(lambda m: m.text == "/premiers")
-        async def on_premiers(message: Message):
-            await self._handle_premiers(message)
+        @self.dp.message_created(Command("premiers"))
+        async def on_premiers(event: MessageCreated):
+            await self._handle_premiers(event)
         
-        @self.dp.message(lambda m: m.text == "/person")
-        async def on_person(message: Message):
-            user_id = message.sender.id
+        @self.dp.message_created(Command("person"))
+        async def on_person(event: MessageCreated):
+            user_id = event.message.sender.user_id
             self.user_context[user_id] = {'state': 'awaiting_person'}
-            await self.bot.send_message(
-                chat_id=user_id,
-                text="🎭 Введи имя актёра или режиссёра:"
-            )
+            await event.message.answer("🎭 Введи имя актёра или режиссёра:")
         
-        @self.dp.message(lambda m: m.text == "/profile")
-        async def on_profile(message: Message):
-            await self._handle_profile(message)
+        @self.dp.message_created(Command("profile"))
+        async def on_profile(event: MessageCreated):
+            await self._handle_profile(event)
         
-        @self.dp.message(lambda m: m.text == "/help")
-        async def on_help(message: Message):
-            await self.bot.send_message(
-                chat_id=message.sender.id,
-                text=(
-                    "❓ <b>Команды:</b>\n\n"
-                    "/start — приветствие\n"
-                    "/random — случайный фильм\n"
-                    "/search — поиск по названию\n"
-                    "/premiers — ожидаемые премьеры\n"
-                    "/person — поиск по актёрам/режиссёрам\n"
-                    "/profile — мой профиль\n"
-                    "/help — это сообщение"
-                ),
+        @self.dp.message_created(Command("help"))
+        async def on_help(event: MessageCreated):
+            await event.message.answer(
+                "❓ <b>Команды:</b>\n\n"
+                "/start — приветствие\n"
+                "/random — случайный фильм\n"
+                "/search — поиск по названию\n"
+                "/premiers — ожидаемые премьеры\n"
+                "/person — поиск по актёрам/режиссёрам\n"
+                "/profile — мой профиль\n"
+                "/help — это сообщение",
                 parse_mode="html"
             )
         
-        # ===== ОБРАБОТЧИК ТЕКСТОВЫХ СООБЩЕНИЙ =====
-        @self.dp.message()
-        async def on_message(message: Message):
-            await self._handle_message(message)
-        
-        # ===== ОБРАБОТЧИК НАЖАТИЙ НА КНОПКИ =====
-        @self.dp.callback()
-        async def on_callback(cb: CallbackQuery):
-            await self._handle_callback(cb)
+        @self.dp.message_created()
+        async def on_message(event: MessageCreated):
+            await self._handle_message(event)
     
-    # ==================== ОСНОВНЫЕ ОБРАБОТЧИКИ ====================
-    
-    async def _handle_start(self, message: Message):
-        user_id = message.sender.id
-        username = getattr(message.sender, 'username', '') or ''
-        first_name = getattr(message.sender, 'first_name', '') or ''
-        last_name = getattr(message.sender, 'last_name', '') or ''
+    async def _handle_start(self, event: MessageCreated):
+        user_id = event.message.sender.user_id
+        username = getattr(event.message.sender, 'username', '') or ''
+        first_name = getattr(event.message.sender, 'first_name', '') or ''
+        last_name = getattr(event.message.sender, 'last_name', '') or ''
         
         try:
             register_user(
@@ -150,150 +138,75 @@ class MaxAdapter:
         
         limits = get_user_limits(user_id)
         
-        # Клавиатура с кнопками
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🎲 Случайный фильм", callback_data="random")],
-            [InlineKeyboardButton(text="🔍 Поиск", callback_data="search")],
-            [InlineKeyboardButton(text="🎉 Премьеры", callback_data="premiers")],
-            [InlineKeyboardButton(text="🎭 Поиск по актёрам", callback_data="person")],
-            [InlineKeyboardButton(text="👤 Мой профиль", callback_data="profile")],
-        ])
-        
-        welcome_text = (
+        await event.message.answer(
             f"🐾 <b>Гав! Я КиноИщейка!</b>\n\n"
             f"📊 <b>Твой тариф:</b> {limits.get('tariff_name', 'Щенячий азарт')}\n"
             f"🎬 <b>Мнений сегодня:</b> 0/{limits.get('opinion_limit', 3)}\n\n"
-            f"👇 <b>Нажми на кнопку:</b>"
-        )
-        
-        await self.bot.send_message(
-            chat_id=user_id,
-            text=welcome_text,
-            parse_mode="html",
-            reply_markup=keyboard
+            f"👇 <b>Команды:</b>\n"
+            f"• /random — случайный фильм\n"
+            f"• /search — поиск по названию\n"
+            f"• /premiers — ожидаемые премьеры\n"
+            f"• /person — поиск по актёрам/режиссёрам\n"
+            f"• /profile — мой профиль\n"
+            f"• /help — помощь",
+            parse_mode="html"
         )
     
-    async def _handle_random(self, message: Message):
-        user_id = message.sender.id
-        await self.bot.send_message(chat_id=user_id, text="🎲 Ищу случайный фильм...")
+    async def _handle_random(self, event: MessageCreated):
+        user_id = event.message.sender.user_id
+        await event.message.answer("🎲 Ищу случайный фильм...")
         
         movie_data = get_random_movie_from_db(min_rating=7.0, is_new_only=False)
         if not movie_data:
-            await self.bot.send_message(chat_id=user_id, text="😢 Не нашла фильмов.")
+            await event.message.answer("😢 Не нашла фильмов.")
             return
         
         movie_details = get_movie_details(movie_data['id'])
         if not movie_details:
-            await self.bot.send_message(chat_id=user_id, text="😢 Не могу найти информацию.")
+            await event.message.answer("😢 Не могу найти информацию.")
             return
         
         card_text, _ = format_movie_card(movie_details)
-        
         if card_text:
-            # Кнопка для мнения
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(
-                    text="🐾 Мнение КиноИщейки", 
-                    callback_data=f"opinion:{movie_details['id']}"
-                )]
-            ])
-            await self.bot.send_message(
-                chat_id=user_id,
-                text=card_text,
-                parse_mode='html',
-                reply_markup=keyboard
-            )
+            await event.message.answer(card_text, parse_mode='html')
         else:
-            await self.bot.send_message(chat_id=user_id, text="😢 Не могу показать карточку.")
+            await event.message.answer("😢 Не могу показать карточку.")
     
-    async def _handle_premiers(self, message: Message):
-        user_id = message.sender.id
-        await self.bot.send_message(chat_id=user_id, text="🎉 Ищу ожидаемые премьеры...")
+    async def _handle_premiers(self, event: MessageCreated):
+        user_id = event.message.sender.user_id
+        await event.message.answer("🎉 Ищу ожидаемые премьеры...")
         
         premiers_list = get_premier_movies_from_db()
         if not premiers_list:
-            await self.bot.send_message(chat_id=user_id, text="😢 Сейчас нет ожидаемых премьер.")
+            await event.message.answer("😢 Сейчас нет ожидаемых премьер.")
             return
         
-        self.user_context[user_id] = {
-            'state': 'premiers',
-            'movies': premiers_list,
-            'page': 0
-        }
-        await self._show_premiers_page(user_id)
-    
-    async def _show_premiers_page(self, user_id: int):
-        context = self.user_context.get(user_id, {})
-        movies_list = context.get('movies', [])
-        page = context.get('page', 0)
-        
-        if not movies_list:
-            await self.bot.send_message(chat_id=user_id, text="😢 Нет премьер для показа.")
-            return
-        
-        items_per_page = 3
-        total_pages = (len(movies_list) + items_per_page - 1) // items_per_page
-        start_idx = page * items_per_page
-        end_idx = min(start_idx + items_per_page, len(movies_list))
-        
-        await self.bot.send_message(
-            chat_id=user_id,
-            text=f"🎉 <b>Ожидаемые премьеры</b>\nСтраница {page+1} из {total_pages}",
-            parse_mode="html"
-        )
-        
-        for movie_data in movies_list[start_idx:end_idx]:
+        for movie_data in premiers_list[:5]:
             movie_details = get_movie_details(movie_data['id'])
             if movie_details:
                 card_text, _ = format_movie_card(movie_details, is_premiers=True)
                 if card_text:
-                    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(
-                            text="🐾 Мнение КиноИщейки", 
-                            callback_data=f"opinion:{movie_details['id']}"
-                        )]
-                    ])
-                    await self.bot.send_message(
-                        chat_id=user_id,
-                        text=card_text,
-                        parse_mode='html',
-                        reply_markup=keyboard
-                    )
+                    await event.message.answer(card_text, parse_mode='html')
         
-        # Кнопки навигации
-        nav_buttons = []
-        if page > 0:
-            nav_buttons.append(InlineKeyboardButton("◀️ Назад", callback_data=f"premiers_page_{page-1}"))
-        if page < total_pages - 1:
-            nav_buttons.append(InlineKeyboardButton("Вперёд ▶️", callback_data=f"premiers_page_{page+1}"))
-        
-        if nav_buttons:
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[nav_buttons])
-            await self.bot.send_message(
-                chat_id=user_id,
-                text="👇 Навигация:",
-                reply_markup=keyboard
-            )
+        if len(premiers_list) > 5:
+            await event.message.answer(f"🐾 Нашла {len(premiers_list)} премьер. Показаны первые 5.")
     
-    async def _handle_profile(self, message: Message):
-        user_id = message.sender.id
+    async def _handle_profile(self, event: MessageCreated):
+        user_id = event.message.sender.user_id
         limits = get_user_limits(user_id)
         
-        await self.bot.send_message(
-            chat_id=user_id,
-            text=(
-                f"👤 <b>Твой профиль</b>\n\n"
-                f"📊 Тариф: {limits.get('tariff_name', 'Щенячий азарт')}\n"
-                f"🎬 Мнений в сутки: {limits.get('opinion_limit', 3)}\n"
-                f"🔄 Свежих взглядов: {limits.get('regeneration_limit', 2)}\n\n"
-                f"🐾 Функция баланса косточек в разработке."
-            ),
+        await event.message.answer(
+            f"👤 <b>Твой профиль</b>\n\n"
+            f"📊 Тариф: {limits.get('tariff_name', 'Щенячий азарт')}\n"
+            f"🎬 Мнений в сутки: {limits.get('opinion_limit', 3)}\n"
+            f"🔄 Свежих взглядов: {limits.get('regeneration_limit', 2)}\n\n"
+            f"🐾 Функция баланса косточек в разработке.",
             parse_mode="html"
         )
     
-    async def _handle_message(self, message: Message):
-        user_id = message.sender.id
-        text = message.text if message.text else ""
+    async def _handle_message(self, event: MessageCreated):
+        user_id = event.message.sender.user_id
+        text = event.message.body.text if event.message.body else ""
         
         if not text:
             return
@@ -302,280 +215,66 @@ class MaxAdapter:
         state = context.get('state')
         
         if state == 'awaiting_search':
-            await self._perform_search(user_id, text)
+            await self._perform_search(event, user_id, text)
         elif state == 'awaiting_person':
-            await self._perform_person_search(user_id, text)
+            await self._perform_person_search(event, user_id, text)
         else:
-            await self.bot.send_message(
-                chat_id=user_id,
-                text="🐾 Я не понимаю эту команду.\n\nИспользуй /start для списка команд."
-            )
+            await event.message.answer("🐾 Я не понимаю эту команду.\n\nИспользуй /start для списка команд.")
     
-    async def _perform_search(self, user_id: int, query: str):
+    async def _perform_search(self, event: MessageCreated, user_id: int, query: str):
         if len(query) < 2:
-            await self.bot.send_message(chat_id=user_id, text="🐾 Введи хотя бы 2 символа.")
+            await event.message.answer("🐾 Введи хотя бы 2 символа.")
             self.user_context.pop(user_id, None)
             return
         
-        await self.bot.send_message(chat_id=user_id, text=f"🔍 Ищу: {query}...")
+        await event.message.answer(f"🔍 Ищу: {query}...")
         
         movies_list = search_movies_in_db(query, min_rating=0.0, max_rating=10.0)
         if not movies_list:
-            await self.bot.send_message(chat_id=user_id, text=f"😢 По запросу '{query}' ничего не нашлось.")
+            await event.message.answer(f"😢 По запросу '{query}' ничего не нашлось.")
         else:
-            self.user_context[user_id] = {
-                'state': 'search_results',
-                'query': query,
-                'movies': movies_list,
-                'page': 0
-            }
-            await self._show_search_page(user_id)
-        
-        # Не удаляем контекст — он нужен для пагинации
-    
-    async def _show_search_page(self, user_id: int):
-        context = self.user_context.get(user_id, {})
-        movies_list = context.get('movies', [])
-        query = context.get('query', '')
-        page = context.get('page', 0)
-        
-        if not movies_list:
-            await self.bot.send_message(chat_id=user_id, text="😢 Нет фильмов для показа.")
-            return
-        
-        items_per_page = 3
-        total_pages = (len(movies_list) + items_per_page - 1) // items_per_page
-        start_idx = page * items_per_page
-        end_idx = min(start_idx + items_per_page, len(movies_list))
-        
-        await self.bot.send_message(
-            chat_id=user_id,
-            text=f"📽 <b>Результаты поиска \"{query}\"</b>\nСтраница {page+1} из {total_pages}",
-            parse_mode="html"
-        )
-        
-        for movie_data in movies_list[start_idx:end_idx]:
-            movie_details = get_movie_details(movie_data['id'])
-            if movie_details:
-                card_text, _ = format_movie_card(movie_details)
-                if card_text:
-                    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(
-                            text="🐾 Мнение КиноИщейки", 
-                            callback_data=f"opinion:{movie_details['id']}"
-                        )]
-                    ])
-                    await self.bot.send_message(
-                        chat_id=user_id,
-                        text=card_text,
-                        parse_mode='html',
-                        reply_markup=keyboard
-                    )
-        
-        # Кнопки навигации
-        nav_buttons = []
-        if page > 0:
-            nav_buttons.append(InlineKeyboardButton("◀️ Назад", callback_data=f"search_page_{page-1}"))
-        if page < total_pages - 1:
-            nav_buttons.append(InlineKeyboardButton("Вперёд ▶️", callback_data=f"search_page_{page+1}"))
-        
-        if nav_buttons:
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[nav_buttons])
-            await self.bot.send_message(
-                chat_id=user_id,
-                text="👇 Навигация:",
-                reply_markup=keyboard
-            )
-    
-    async def _perform_person_search(self, user_id: int, query: str):
-        if len(query) < 2:
-            await self.bot.send_message(chat_id=user_id, text="🐾 Введи хотя бы 2 символа.")
-            self.user_context.pop(user_id, None)
-            return
-        
-        await self.bot.send_message(chat_id=user_id, text=f"🎭 Ищу фильмы с: {query}...")
-        
-        movies_list = search_movies_by_person_in_db(query, min_rating=0.0, max_rating=10.0)
-        if not movies_list:
-            await self.bot.send_message(chat_id=user_id, text=f"😢 По запросу '{query}' ничего не нашлось.")
-        else:
-            self.user_context[user_id] = {
-                'state': 'person_results',
-                'query': query,
-                'movies': movies_list,
-                'page': 0
-            }
-            await self._show_person_page(user_id)
-    
-    async def _show_person_page(self, user_id: int):
-        context = self.user_context.get(user_id, {})
-        movies_list = context.get('movies', [])
-        query = context.get('query', '')
-        page = context.get('page', 0)
-        
-        if not movies_list:
-            await self.bot.send_message(chat_id=user_id, text="😢 Нет фильмов для показа.")
-            return
-        
-        items_per_page = 3
-        total_pages = (len(movies_list) + items_per_page - 1) // items_per_page
-        start_idx = page * items_per_page
-        end_idx = min(start_idx + items_per_page, len(movies_list))
-        
-        await self.bot.send_message(
-            chat_id=user_id,
-            text=f"🎭 <b>Фильмы с участием: {query}</b>\nСтраница {page+1} из {total_pages}",
-            parse_mode="html"
-        )
-        
-        for movie_data in movies_list[start_idx:end_idx]:
-            movie_details = get_movie_details(movie_data['id'])
-            if movie_details:
-                card_text, _ = format_movie_card(movie_details, is_person_search=True, query=query)
-                if card_text:
-                    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                        [InlineKeyboardButton(
-                            text="🐾 Мнение КиноИщейки", 
-                            callback_data=f"opinion:{movie_details['id']}"
-                        )]
-                    ])
-                    await self.bot.send_message(
-                        chat_id=user_id,
-                        text=card_text,
-                        parse_mode='html',
-                        reply_markup=keyboard
-                    )
-        
-        nav_buttons = []
-        if page > 0:
-            nav_buttons.append(InlineKeyboardButton("◀️ Назад", callback_data=f"person_page_{page-1}"))
-        if page < total_pages - 1:
-            nav_buttons.append(InlineKeyboardButton("Вперёд ▶️", callback_data=f"person_page_{page+1}"))
-        
-        if nav_buttons:
-            keyboard = InlineKeyboardMarkup(inline_keyboard=[nav_buttons])
-            await self.bot.send_message(
-                chat_id=user_id,
-                text="👇 Навигация:",
-                reply_markup=keyboard
-            )
-    
-    # ==================== ОБРАБОТЧИК КНОПОК ====================
-    
-    async def _handle_callback(self, cb: CallbackQuery):
-        user_id = cb.user.id
-        data = cb.payload
-        
-        logger.info(f"Callback от {user_id}: {data}")
-        
-        # Обработка команд из главного меню
-        if data == "random":
-            await self.bot.send_message(chat_id=user_id, text="🎲 Ищу случайный фильм...")
-            movie_data = get_random_movie_from_db(min_rating=7.0, is_new_only=False)
-            if movie_data:
+            for movie_data in movies_list[:5]:
                 movie_details = get_movie_details(movie_data['id'])
                 if movie_details:
                     card_text, _ = format_movie_card(movie_details)
                     if card_text:
-                        keyboard = InlineKeyboardMarkup(inline_keyboard=[
-                            [InlineKeyboardButton(
-                                text="🐾 Мнение КиноИщейки", 
-                                callback_data=f"opinion:{movie_details['id']}"
-                            )]
-                        ])
-                        await self.bot.send_message(
-                            chat_id=user_id,
-                            text=card_text,
-                            parse_mode='html',
-                            reply_markup=keyboard
-                        )
-                        return
+                        await event.message.answer(card_text, parse_mode='html')
+            
+            if len(movies_list) > 5:
+                await event.message.answer(f"🐾 Нашла {len(movies_list)} фильмов. Показаны первые 5.\n\nДля более точного поиска введи /search и уточни запрос.")
         
-        elif data == "search":
-            self.user_context[user_id] = {'state': 'awaiting_search'}
-            await self.bot.send_message(chat_id=user_id, text="🔍 Введи название фильма:")
+        self.user_context.pop(user_id, None)
+    
+    async def _perform_person_search(self, event: MessageCreated, user_id: int, query: str):
+        if len(query) < 2:
+            await event.message.answer("🐾 Введи хотя бы 2 символа.")
+            self.user_context.pop(user_id, None)
             return
         
-        elif data == "premiers":
-            await self._handle_premiers_btn(user_id)
-            return
+        await event.message.answer(f"🎭 Ищу фильмы с участием: {query}...")
         
-        elif data == "person":
-            self.user_context[user_id] = {'state': 'awaiting_person'}
-            await self.bot.send_message(chat_id=user_id, text="🎭 Введи имя актёра или режиссёра:")
-            return
-        
-        elif data == "profile":
-            limits = get_user_limits(user_id)
-            await self.bot.send_message(
-                chat_id=user_id,
-                text=(
-                    f"👤 <b>Твой профиль</b>\n\n"
-                    f"📊 Тариф: {limits.get('tariff_name', 'Щенячий азарт')}\n"
-                    f"🎬 Мнений в сутки: {limits.get('opinion_limit', 3)}\n"
-                    f"🔄 Свежих взглядов: {limits.get('regeneration_limit', 2)}"
-                ),
-                parse_mode="html"
-            )
-            return
-        
-        # Пагинация
-        elif data.startswith("search_page_"):
-            page = int(data.split("_")[2])
-            if user_id in self.user_context:
-                self.user_context[user_id]['page'] = page
-                await self._show_search_page(user_id)
-            return
-        
-        elif data.startswith("person_page_"):
-            page = int(data.split("_")[2])
-            if user_id in self.user_context:
-                self.user_context[user_id]['page'] = page
-                await self._show_person_page(user_id)
-            return
-        
-        elif data.startswith("premiers_page_"):
-            page = int(data.split("_")[2])
-            if user_id in self.user_context:
-                self.user_context[user_id]['page'] = page
-                await self._show_premiers_page(user_id)
-            return
-        
-        # Мнение о фильме (заглушка — будет реализовано позже)
-        elif data.startswith("opinion:"):
-            movie_id = int(data.split(":")[1])
-            await self.bot.send_message(
-                chat_id=user_id,
-                text=f"🐾 Мнение о фильме ID:{movie_id} будет доступно в следующей версии!\n\nПока просто наслаждайся поиском 🎬"
-            )
-            return
-        
+        movies_list = search_movies_by_person_in_db(query, min_rating=0.0, max_rating=10.0)
+        if not movies_list:
+            await event.message.answer(f"😢 По запросу '{query}' ничего не нашлось.")
         else:
-            await self.bot.send_message(chat_id=user_id, text=f"🐾 Неизвестная команда: {data}")
-    
-    async def _handle_premiers_btn(self, user_id: int):
-        await self.bot.send_message(chat_id=user_id, text="🎉 Ищу ожидаемые премьеры...")
+            for movie_data in movies_list[:5]:
+                movie_details = get_movie_details(movie_data['id'])
+                if movie_details:
+                    card_text, _ = format_movie_card(movie_details, is_person_search=True, query=query)
+                    if card_text:
+                        await event.message.answer(card_text, parse_mode='html')
+            
+            if len(movies_list) > 5:
+                await event.message.answer(f"🐾 Нашла {len(movies_list)} фильмов. Показаны первые 5.\n\nДля более точного поиска введи /person и уточни запрос.")
         
-        premiers_list = get_premier_movies_from_db()
-        if not premiers_list:
-            await self.bot.send_message(chat_id=user_id, text="😢 Сейчас нет ожидаемых премьер.")
-            return
-        
-        self.user_context[user_id] = {
-            'state': 'premiers',
-            'movies': premiers_list,
-            'page': 0
-        }
-        await self._show_premiers_page(user_id)
-    
-    # ==================== ЗАПУСК ====================
+        self.user_context.pop(user_id, None)
     
     async def run(self):
-        logger.info("🚀 MaxAdapter (maxbot) запущен, ожидаем сообщения...")
-        await self.dp.start_polling()
+        logger.info("🚀 MaxAdapter запущен")
+        await self.bot.delete_webhook()
+        await self.dp.start_polling(self.bot)
 
 
-# Точка входа
 if __name__ == "__main__":
     import asyncio
     adapter = MaxAdapter()
