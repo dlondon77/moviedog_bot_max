@@ -1,4 +1,5 @@
-# core/max_adapter.py — ФИНАЛЬНАЯ РАБОЧАЯ ВЕРСИЯ С КНОПКАМИ
+# core/max_adapter.py — РАБОЧАЯ ВЕРСИЯ С КНОПКАМИ (через свой класс)
+
 import logging
 import configparser
 import os
@@ -7,6 +8,7 @@ from datetime import date, datetime
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CORE_DIR = os.path.join(BASE_DIR, 'core')
+
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 if CORE_DIR not in sys.path:
@@ -91,37 +93,46 @@ else:
     logger.warning("⚠️ OPENAI_API_KEY не найден")
 
 
-# ==================== ГЛАВНАЯ КЛАВИАТУРА (СЛОВАРЬ) ====================
-MAIN_KEYBOARD = {
-    "type": "inline_keyboard",
-    "payload": {
-        "buttons": [
-            [
-                {"type": "callback", "text": "🎲 Случайный фильм", "payload": "random"},
-                {"type": "callback", "text": "🔍 Поиск", "payload": "search"}
-            ],
-            [
-                {"type": "callback", "text": "🎉 Премьеры", "payload": "premiers"},
-                {"type": "callback", "text": "🎭 Поиск по актёрам", "payload": "person"}
-            ],
-            [
-                {"type": "callback", "text": "👤 Мой профиль", "payload": "profile"},
-                {"type": "callback", "text": "🐾 Мнение о фильме", "payload": "opinion_prompt"}
-            ]
+# ==================== СВОЙ КЛАСС КЛАВИАТУРЫ ====================
+class InlineKeyboardMarkup:
+    """Свой класс клавиатуры, который даёт .model_dump() как требует maxapi"""
+    def __init__(self, buttons):
+        self.buttons = buttons  # список списков словарей
+
+    def model_dump(self):
+        return {
+            "type": "inline_keyboard",
+            "payload": {
+                "buttons": self.buttons
+            }
+        }
+
+
+# ==================== ФУНКЦИИ СОЗДАНИЯ КЛАВИАТУР ====================
+def get_main_menu():
+    """Главное меню с кнопками"""
+    buttons = [
+        [
+            {"type": "callback", "text": "🎲 Случайный фильм", "payload": "random"},
+            {"type": "callback", "text": "🔍 Поиск", "payload": "search"}
+        ],
+        [
+            {"type": "callback", "text": "🎉 Премьеры", "payload": "premiers"},
+            {"type": "callback", "text": "🎭 Поиск по актёрам", "payload": "person"}
+        ],
+        [
+            {"type": "callback", "text": "👤 Мой профиль", "payload": "profile"},
+            {"type": "callback", "text": "🐾 Мнение о фильме", "payload": "opinion_prompt"}
         ]
-    }
-}
+    ]
+    return InlineKeyboardMarkup(buttons)
 
 def get_opinion_button(movie_id: int):
-    """Возвращает одну кнопку 'Мнение о фильме' для карточки"""
-    return {
-        "type": "inline_keyboard",
-        "payload": {
-            "buttons": [
-                [{"type": "callback", "text": "🐾 Мнение о фильме", "payload": f"opinion_{movie_id}"}]
-            ]
-        }
-    }
+    """Кнопка 'Мнение о фильме' для карточки"""
+    buttons = [
+        [{"type": "callback", "text": "🐾 Мнение о фильме", "payload": f"opinion_{movie_id}"}]
+    ]
+    return InlineKeyboardMarkup(buttons)
 
 
 # ==================== ОСНОВНОЙ КЛАСС АДАПТЕРА ====================
@@ -134,13 +145,12 @@ class MaxAdapter:
 
         self.bot = Bot(token=self.token)
         self.dp = Dispatcher()
-        self.user_context = {}  # Для хранения состояний (awaiting_search, awaiting_person, awaiting_opinion)
+        self.user_context = {}
 
         self._register_handlers()
-        logger.info("✅ MaxAdapter инициализирован с поддержкой кнопок (attachments)")
+        logger.info("✅ MaxAdapter инициализирован с поддержкой кнопок (свой класс)")
 
     def _register_handlers(self):
-        # Обработчик нажатия кнопки "Начать" в диалоге
         @self.dp.bot_started()
         async def on_bot_started(event: BotStarted):
             await self.bot.send_message(
@@ -148,46 +158,38 @@ class MaxAdapter:
                 text="🐾 Привет! Я КиноИщейка!\nНапиши /start чтобы увидеть меню."
             )
 
-        # Команда /start с клавиатурой
         @self.dp.message_created(F.message.body.text == "/start")
         async def on_start(event: MessageCreated):
             await self._handle_start(event)
 
-        # Команда /random
         @self.dp.message_created(F.message.body.text == "/random")
         async def on_random(event: MessageCreated):
             await self._handle_random(event)
 
-        # Команда /search
         @self.dp.message_created(F.message.body.text == "/search")
         async def on_search(event: MessageCreated):
             user_id = event.message.sender.user_id
             self.user_context[user_id] = {'state': 'awaiting_search'}
             await event.message.answer("🔍 Введи название фильма:")
 
-        # Команда /premiers
         @self.dp.message_created(F.message.body.text == "/premiers")
         async def on_premiers(event: MessageCreated):
             await self._handle_premiers(event)
 
-        # Команда /person
         @self.dp.message_created(F.message.body.text == "/person")
         async def on_person(event: MessageCreated):
             user_id = event.message.sender.user_id
             self.user_context[user_id] = {'state': 'awaiting_person'}
             await event.message.answer("🎭 Введи имя актёра или режиссёра:")
 
-        # Команда /profile
         @self.dp.message_created(F.message.body.text == "/profile")
         async def on_profile(event: MessageCreated):
             await self._handle_profile(event)
 
-        # Команда /opinion
         @self.dp.message_created(F.message.body.text.startswith("/opinion"))
         async def on_opinion(event: MessageCreated):
             await self._handle_opinion_command(event)
 
-        # Команда /help
         @self.dp.message_created(F.message.body.text == "/help")
         async def on_help(event: MessageCreated):
             await event.message.answer(
@@ -203,12 +205,10 @@ class MaxAdapter:
                 parse_mode="html"
             )
 
-        # 👇 ГЛАВНЫЙ ОБРАБОТЧИК НАЖАТИЙ НА КНОПКИ
         @self.dp.message_callback()
         async def on_callback(event):
             await self._handle_callback(event)
 
-        # Обработчик обычных текстовых сообщений
         @self.dp.message_created()
         async def on_message(event: MessageCreated):
             await self._handle_message(event)
@@ -242,20 +242,17 @@ class MaxAdapter:
             f"🎬 <b>Мнений сегодня:</b> 0/{limits.get('opinion_limit', 3)}\n\n"
             f"👇 <b>Выбери действие:</b>",
             parse_mode="html",
-            attachments=[MAIN_KEYBOARD]  # ← вот здесь появляется меню!
+            attachments=[get_main_menu()]  # ← передаём объект класса с .model_dump()
         )
 
 
     async def _handle_callback(self, event):
-        """Обработка нажатий на кнопки"""
         payload = event.callback.payload
         user_id = event.callback.user.id
         logger.info(f"Callback от {user_id}: {payload}")
 
-        # Обязательно отвечаем на callback, чтобы кнопка "перестала крутиться"
-        await event.callback.answer()
+        await event.callback.answer()  # обязательно!
 
-        # Обработка разных payload'ов
         if payload == "random":
             await self._handle_random_mock(user_id)
         elif payload == "search":
@@ -400,7 +397,6 @@ class MaxAdapter:
         movie_name = movie_details.get('name', 'Без названия')
         movie_year = movie_details.get('year', '')
 
-        # Проверяем кэш
         cached = get_cached_opinion(movie_id)
         if cached:
             await send_func(
@@ -553,7 +549,7 @@ class MaxAdapter:
 
     # ==================== ЗАПУСК ====================
     async def run(self):
-        logger.info("🚀 MaxAdapter запущен с поддержкой кнопок (attachments)")
+        logger.info("🚀 MaxAdapter запущен с поддержкой кнопок (свой класс)")
         await self.bot.delete_webhook()
         await self.dp.start_polling(self.bot)
 
