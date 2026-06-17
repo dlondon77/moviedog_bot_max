@@ -1,4 +1,6 @@
-# core/max_adapter.py — с пагинацией, красивыми мнениями и стартовой картинкой
+# core/max_adapter.py — ПОЛНАЯ ФИНАЛЬНАЯ ВЕРСИЯ
+# С пагинацией, стартовой картинкой, полным описанием,
+# всеми актёрами/режиссёрами и безопасным контекстом
 
 import logging
 import configparser
@@ -183,7 +185,7 @@ class MaxAdapter:
         @self.dp.message_created(F.message.body.text == "/search")
         async def on_search(event: MessageCreated):
             user_id = event.message.sender.user_id
-            self.user_context[user_id] = {'state': 'awaiting_search'}
+            self._get_user_context(user_id)['state'] = 'awaiting_search'
             await event.message.answer("🔍 Введи название фильма:")
 
         @self.dp.message_created(F.message.body.text == "/premiers")
@@ -193,7 +195,7 @@ class MaxAdapter:
         @self.dp.message_created(F.message.body.text == "/person")
         async def on_person(event: MessageCreated):
             user_id = event.message.sender.user_id
-            self.user_context[user_id] = {'state': 'awaiting_person'}
+            self._get_user_context(user_id)['state'] = 'awaiting_person'
             await event.message.answer("🎭 Введи имя актёра или режиссёра:")
 
         @self.dp.message_created(F.message.body.text == "/profile")
@@ -228,13 +230,21 @@ class MaxAdapter:
             await self._handle_message(event)
 
 
+    # ==================== ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ====================
+    def _get_user_context(self, user_id: int) -> dict:
+        """Возвращает контекст пользователя, создавая его при необходимости"""
+        if user_id not in self.user_context:
+            self.user_context[user_id] = {}
+        return self.user_context[user_id]
+
+
     # ==================== СТАРТ С КАРТИНКОЙ ====================
     async def _handle_start(self, event: MessageCreated):
         user_id = event.message.sender.user_id
         username = getattr(event.message.sender, 'username', '') or ''
         first_name = getattr(event.message.sender, 'first_name', '') or ''
         last_name = getattr(event.message.sender, 'last_name', '') or ''
-    
+
         try:
             register_user(
                 user_id=user_id,
@@ -246,9 +256,10 @@ class MaxAdapter:
             logger.info(f"✅ Пользователь {user_id} зарегистрирован")
         except Exception as e:
             logger.error(f"Ошибка регистрации: {e}")
-    
+
         limits = get_user_limits(user_id)
-    
+
+        # Текст как в Telegram
         start_text = (
             "🐾 <b>Гав! Я - КиноИщейка!</b> Добро пожаловать в мир кино! 🎬\n\n"
             "Я помогу тебе найти фильмы, сериалы и мультфильмы на Кинопоиске, которые ты точно полюбишь.\n\n"
@@ -265,25 +276,28 @@ class MaxAdapter:
             tariff=limits.get('tariff_name', 'Щенячий азарт'),
             limit=limits.get('opinion_limit', 3)
         )
-    
+
         photo_url = get_start_image_url()
-    
-        # 1. Отправляем фото (если получится)
+
+        # Отправляем фото + текст + клавиатуру
         try:
             await event.message.answer(
-                "",
-                attachments=[{"type": "photo", "payload": {"url": photo_url}}]
+                start_text,
+                parse_mode="html",
+                attachments=[
+                    {"type": "photo", "payload": {"url": photo_url}},
+                    get_main_menu()
+                ]
             )
         except Exception as e:
-            logger.warning(f"Не удалось отправить фото: {e}")
-    
-        # 2. Отправляем текст с клавиатурой
-        await event.message.answer(
-            start_text,
-            parse_mode="html",
-            attachments=[get_main_menu()]
-        )
-    
+            logger.warning(f"Не удалось отправить с фото, отправляем текст: {e}")
+            await event.message.answer(
+                start_text,
+                parse_mode="html",
+                attachments=[get_main_menu()]
+            )
+
+
     # ==================== ОБРАБОТЧИК КНОПОК ====================
     async def _handle_callback(self, event):
         payload = event.callback.payload
@@ -328,18 +342,18 @@ class MaxAdapter:
             await event.message.answer("🎲 Ищу случайный фильм...")
             await self._send_random_result(event.message.answer)
         elif payload == "search":
-            self.user_context[user_id] = {'state': 'awaiting_search'}
+            self._get_user_context(user_id)['state'] = 'awaiting_search'
             await event.message.answer("🔍 Введи название фильма:")
         elif payload == "premiers":
             await event.message.answer("🎉 Ищу ожидаемые премьеры...")
             await self._handle_premiers_search(event, user_id)
         elif payload == "person":
-            self.user_context[user_id] = {'state': 'awaiting_person'}
+            self._get_user_context(user_id)['state'] = 'awaiting_person'
             await event.message.answer("🎭 Введи имя актёра или режиссёра:")
         elif payload == "profile":
             await self._send_profile(event.message.answer, user_id)
         elif payload == "opinion_prompt":
-            self.user_context[user_id] = {'state': 'awaiting_opinion'}
+            self._get_user_context(user_id)['state'] = 'awaiting_opinion'
             await event.message.answer("🐾 Введи ID или название фильма:")
         elif payload.startswith("opinion_"):
             movie_id = int(payload.split("_")[1])
@@ -350,7 +364,7 @@ class MaxAdapter:
 
     # ==================== ПАГИНАЦИЯ ДЛЯ ПОИСКА ====================
     async def _show_search_page(self, event, user_id: int, page: int, query: str):
-        context = self.user_context.get(user_id, {})
+        context = self._get_user_context(user_id)
         movies_list = context.get('movies', [])
         current_query = context.get('query', '')
 
@@ -394,7 +408,7 @@ class MaxAdapter:
 
     # ==================== ПАГИНАЦИЯ ДЛЯ ПРЕМЬЕР ====================
     async def _show_premiers_page(self, event, user_id: int, page: int):
-        context = self.user_context.get(user_id, {})
+        context = self._get_user_context(user_id)
         movies_list = context.get('premiers', [])
 
         if not movies_list:
@@ -436,7 +450,7 @@ class MaxAdapter:
 
     # ==================== ПАГИНАЦИЯ ДЛЯ ПОИСКА ПО АКТЁРАМ ====================
     async def _show_person_page(self, event, user_id: int, page: int, query: str):
-        context = self.user_context.get(user_id, {})
+        context = self._get_user_context(user_id)
         movies_list = context.get('person_movies', [])
         current_query = context.get('person_query', '')
 
@@ -506,8 +520,9 @@ class MaxAdapter:
 
 
     async def _handle_premiers(self, event: MessageCreated):
+        user_id = event.message.sender.user_id
         await event.message.answer("🎉 Ищу ожидаемые премьеры...")
-        await self._handle_premiers_search(event, event.message.sender.user_id)
+        await self._handle_premiers_search(event, user_id)
 
     async def _handle_premiers_search(self, event, user_id: int):
         premiers_list = get_premier_movies_from_db()
@@ -515,7 +530,8 @@ class MaxAdapter:
             await event.message.answer("😢 Сейчас нет ожидаемых премьер.")
             return
 
-        self.user_context[user_id]['premiers'] = premiers_list
+        context = self._get_user_context(user_id)
+        context['premiers'] = premiers_list
         await self._show_premiers_page(event, user_id, 0)
 
 
@@ -535,7 +551,7 @@ class MaxAdapter:
         )
 
 
-    # ==================== МНЕНИЕ О ФИЛЬМЕ (КАК В TG) ====================
+    # ==================== МНЕНИЕ О ФИЛЬМЕ ====================
     async def _handle_opinion_command(self, event: MessageCreated):
         user_id = event.message.sender.user_id
         text = event.message.body.text.replace('/opinion', '').strip()
@@ -582,7 +598,6 @@ class MaxAdapter:
         # Проверяем кэш
         cached = get_cached_opinion(movie_id)
         if cached:
-            # Форматируем мнение как в TG
             formatted_opinion = self._format_opinion(cached, movie_name, movie_year, movie_id)
             await send_func(formatted_opinion, parse_mode="html")
             increment_stat_counter(user_id, 'opinion_count')
@@ -599,13 +614,11 @@ class MaxAdapter:
             opinion_data = await self._generate_opinion(movie_details)
             if opinion_data:
                 full_opinion = opinion_data['full_opinion']
-                short_opinion = opinion_data.get('short_opinion', '')
                 
                 save_opinion_cache(movie_id, full_opinion)
                 increment_stat_counter(user_id, 'opinion_count')
                 record_user_opinion(user_id, movie_id)
                 
-                # Форматируем как в TG
                 formatted_opinion = self._format_opinion(full_opinion, movie_name, movie_year, movie_id)
                 await send_func(formatted_opinion, parse_mode="html")
             else:
@@ -618,25 +631,21 @@ class MaxAdapter:
         """Форматирует мнение как в TG-версии"""
         kp_url = f"https://www.kinopoisk.ru/film/{movie_id}/"
         title_with_link = f"<a href='{kp_url}'><b>{movie_name}</b></a> ({movie_year})"
-        
         return f"Я посмотрела {title_with_link}, и вот что думаю:\n\n{opinion}\n\n🐾"
 
 
     async def _generate_opinion(self, movie_details: dict) -> dict:
-        """Генерирует мнение как в TG-версии с полным промтом"""
+        """Генерирует мнение как в TG-версии"""
         
         title = movie_details.get('name', 'Без названия')
         year = movie_details.get('year', '')
         
-        # Страны
         countries = movie_details.get('countries', [])
         countries_str = ', '.join(countries) if countries else 'неизвестно'
         
-        # Жанры
         genres = movie_details.get('genres', [])
         genres_str = ', '.join(genres) if genres else 'неизвестно'
         
-        # Режиссеры
         directors_list = movie_details.get('directors', [])
         if directors_list:
             director_names = []
@@ -648,7 +657,6 @@ class MaxAdapter:
         else:
             directors_str = 'неизвестен'
         
-        # Актеры (первые 7)
         actors_list = movie_details.get('actors', [])[:7]
         if actors_list:
             actor_names = []
@@ -660,15 +668,11 @@ class MaxAdapter:
         else:
             actors_str = 'не указаны'
         
-        # Рейтинг
         rating = movie_details.get('rating', 0)
-        
-        # Описание
         description = movie_details.get('description', 'Описание отсутствует')
         if description and len(description) > 800:
             description = description[:800] + '...'
-        
-        # Формируем промт как в TG-версии
+
         prompt = f"""Ты — КиноИщейка, собака-девочка, кинокритик с отличным чутьем на хорошее кино. Ты смотришь фильмы и делишься своим мнением с юмором и энтузиазмом. Говори о себе в женском роде.
 
 Информация о фильме:
@@ -746,14 +750,13 @@ class MaxAdapter:
 
 
     # ==================== ОБРАБОТКА ТЕКСТОВЫХ СООБЩЕНИЙ ====================
-
     async def _handle_message(self, event: MessageCreated):
         user_id = event.message.sender.user_id
         text = event.message.body.text if event.message.body else ""
         if not text:
             return
 
-        context = self.user_context.get(user_id, {})
+        context = self._get_user_context(user_id)
         state = context.get('state')
 
         if state == 'awaiting_search':
@@ -781,11 +784,9 @@ class MaxAdapter:
             self.user_context.pop(user_id, None)
             return
 
-        # Сохраняем в контекст
-        self.user_context[user_id] = {
-            'movies': movies_list,
-            'query': query
-        }
+        context = self._get_user_context(user_id)
+        context['movies'] = movies_list
+        context['query'] = query
         await self._show_search_page(event, user_id, 0, query)
 
 
@@ -803,11 +804,9 @@ class MaxAdapter:
             self.user_context.pop(user_id, None)
             return
 
-        # Сохраняем в контекст
-        self.user_context[user_id] = {
-            'person_movies': movies_list,
-            'person_query': query
-        }
+        context = self._get_user_context(user_id)
+        context['person_movies'] = movies_list
+        context['person_query'] = query
         await self._show_person_page(event, user_id, 0, query)
 
 
