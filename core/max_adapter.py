@@ -755,20 +755,26 @@ class MaxAdapter:
         text = event.message.body.text if event.message.body else ""
         if not text:
             return
-
+    
+        # Если текст начинается с "/" — это команда, её обработает другой хендлер
+        if text.startswith("/"):
+            return
+    
         context = self._get_user_context(user_id)
         state = context.get('state')
-
+    
         if state == 'awaiting_search':
             await self._perform_search(event, user_id, text)
+            self.user_context.pop(user_id, None)  # очищаем состояние
         elif state == 'awaiting_person':
             await self._perform_person_search(event, user_id, text)
+            self.user_context.pop(user_id, None)  # очищаем состояние
         elif state == 'awaiting_opinion':
             await self._process_opinion(event, user_id, text, event.message.answer)
-            self.user_context.pop(user_id, None)
+            self.user_context.pop(user_id, None)  # очищаем состояние
         else:
-            await event.message.answer("🐾 Я не понимаю эту команду.\n\nИспользуй /start для меню.")
-
+            # 👇 ПО УМОЛЧАНИЮ — ПОИСК (как в Telegram)
+            await self._perform_search(event, user_id, text)
 
     async def _perform_search(self, event: MessageCreated, user_id: int, query: str):
         if len(query) < 2:
