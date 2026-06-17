@@ -249,7 +249,6 @@ class MaxAdapter:
     
         limits = get_user_limits(user_id)
     
-        # === ТЕКСТ КАК В TELEGRAM (адаптирован для Max) ===
         start_text = (
             "🐾 <b>Гав! Я - КиноИщейка!</b> Добро пожаловать в мир кино! 🎬\n\n"
             "Я помогу тебе найти фильмы, сериалы и мультфильмы на Кинопоиске, которые ты точно полюбишь.\n\n"
@@ -267,27 +266,24 @@ class MaxAdapter:
             limit=limits.get('opinion_limit', 3)
         )
     
-        # Пробуем отправить с фото
         photo_url = get_start_image_url()
-        
+    
+        # 1. Отправляем фото (если получится)
         try:
-            # Отправляем фото + текст + клавиатуру
             await event.message.answer(
-                start_text,
-                parse_mode="html",
-                attachments=[
-                    {"type": "photo", "payload": {"url": photo_url}},
-                    get_main_menu()
-                ]
+                "",
+                attachments=[{"type": "photo", "payload": {"url": photo_url}}]
             )
         except Exception as e:
-            logger.warning(f"Не удалось отправить с фото, отправляем текст: {e}")
-            await event.message.answer(
-                start_text,
-                parse_mode="html",
-                attachments=[get_main_menu()]
-            )
-
+            logger.warning(f"Не удалось отправить фото: {e}")
+    
+        # 2. Отправляем текст с клавиатурой
+        await event.message.answer(
+            start_text,
+            parse_mode="html",
+            attachments=[get_main_menu()]
+        )
+    
     # ==================== ОБРАБОТЧИК КНОПОК ====================
     async def _handle_callback(self, event):
         payload = event.callback.payload
