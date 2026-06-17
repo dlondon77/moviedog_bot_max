@@ -1,4 +1,4 @@
-# core/max_adapter.py — с пагинацией, красивыми мнениями и стартовой картинкой
+# core/max_adapter.py — с постерами в карточках
 
 import logging
 import configparser
@@ -35,7 +35,6 @@ record_user_opinion = user_module.record_user_opinion
 
 get_random_movie_from_db = movie_module.get_random_movie_from_db
 get_movie_details = movie_module.get_movie_details
-format_movie_card = movie_module.format_movie_card
 search_movies_in_db = movie_module.search_movies_in_db
 search_movies_by_person_in_db = movie_module.search_movies_by_person_in_db
 get_premier_movies_from_db = movie_module.get_premier_movies_from_db
@@ -133,7 +132,6 @@ def get_opinion_button(movie_id: int):
     return InlineKeyboardMarkup(buttons)
 
 def get_pagination_buttons(current_page: int, total_pages: int, prefix: str, query: str = ""):
-    """Создаёт кнопки пагинации"""
     buttons = []
     row = []
     if current_page > 0:
@@ -145,8 +143,121 @@ def get_pagination_buttons(current_page: int, total_pages: int, prefix: str, que
     return InlineKeyboardMarkup(buttons)
 
 def get_start_image_url():
-    """Возвращает URL стартовой картинки КиноИщейки"""
     return "https://i.postimg.cc/Y0TkbYv0/Spring-Start-01.jpg"
+
+
+# ==================== РАСШИРЕННАЯ КАРТОЧКА ФИЛЬМА ДЛЯ MAX ====================
+def format_movie_card_max(movie: dict, is_premiers: bool = False, query: str = None, is_person_search: bool = False) -> tuple:
+    """
+    Форматирует карточку фильма для MAX с полным описанием,
+    всеми актёрами/режиссёрами.
+    Возвращает (текст_карточки, кнопка_мнения)
+    """
+    if not movie or not isinstance(movie, dict):
+        return None, None
+
+    try:
+        # Основные данные
+        title = movie.get('name', 'Без названия') or 'отсутствует'
+        year = str(movie.get('year', '')) if movie.get('year') else 'отсутствует'
+        is_new = movie.get('is_new_release', False)
+        movie_id = str(movie.get('id', '')) if movie.get('id') else ''
+        
+        year_display = f"({year}) 🆕" if is_new else f"({year})"
+        
+        # Тип фильма
+        content_type = movie.get('movie_type', 'movie')
+        type_mapping = {
+            'movie': 'фильм',
+            'tv-series': 'сериал',
+            'mini-series': 'мини-сериал',
+            'cartoon': 'мультфильм'
+        }
+        type_text = type_mapping.get(content_type, 'фильм')
+        
+        # Рейтинг
+        rating = round(movie.get('rating', 0), 1) if movie.get('rating') else "отсутствует"
+        
+        # Страны и жанры
+        countries = ', '.join(movie.get('countries', [])) if movie.get('countries') else 'отсутствует'
+        genres = ', '.join(movie.get('genres', [])) if movie.get('genres') else 'отсутствует'
+        
+        # ОПИСАНИЕ — ПОЛНОЕ
+        description = movie.get('description', '')
+        if not description or description == 'null' or description == 'None':
+            description = 'Описание отсутствует'
+        
+        # Режиссеры — ВСЕ
+        directors_list = []
+        for director in movie.get('directors', []):
+            director_name = director.get('name', '') or director.get('enName', '')
+            director_id = director.get('id', '')
+            if director_name:
+                if is_person_search and director_id and query and query.lower() in director_name.lower():
+                    director_url = f"https://www.kinopoisk.ru/name/{director_id}/"
+                    director_name = f"<a href='{director_url}'>{director_name}</a>"
+                directors_list.append(director_name)
+        directors = ',\n'.join(directors_list) if directors_list else 'отсутствует'
+        
+        # Актеры — ВСЕ
+        actors_list = []
+        for actor in movie.get('actors', []):
+            actor_name = actor.get('name', '') or actor.get('enName', '')
+            actor_id = actor.get('id', '')
+            if actor_name:
+                if is_person_search and actor_id and query and query.lower() in actor_name.lower():
+                    actor_url = f"https://www.kinopoisk.ru/name/{actor_id}/"
+                    actor_name = f"<a href='{actor_url}'>{actor_name}</a>"
+                actors_list.append(actor_name)
+        actors = ',\n'.join(actors_list) if actors_list else 'отсутствует'
+        
+        # Премьеры для новинок
+        premiere_info = ""
+        if is_premiers or movie.get('is_new_release'):
+            premiere_russia = movie.get('premiere_russia')
+            premiere_world = movie.get('premiere_world')
+            await_count = movie.get('await_count', 0)
+            
+            def format_premiere_date(date_str):
+                if not date_str:
+                    return 'отсутствует'
+                try:
+                    if 'T' in date_str:
+                        date_part = date_str.split('T')[0]
+                        return datetime.strptime(date_part, "%Y-%m-%d").strftime("%d.%m.%Y")
+                    else:
+                        return datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S").strftime("%d.%m.%Y")
+                except Exception:
+                    return 'отсутствует'
+            
+            premiere_info = (
+                f"\n🎉 Премьера РФ: <b>{format_premiere_date(premiere_russia)}</b>\n"
+                f"🌎 Премьера Мир: <b>{format_premiere_date(premiere_world)}</b>\n"
+                f"👥 Ожидают: <b>{int(await_count) if await_count else 0}</b> чел.\n"
+            )
+        
+        # Ссылка на Кинопоиск
+        kp_url = f"https://www.kinopoisk.ru/film/{movie_id}/" if movie_id else "https://www.kinopoisk.ru/"
+        
+        # Формируем карточку с отступами
+        card = (
+            f"<a href='{kp_url}'><b>{title}</b></a> {year_display}\n"
+            f"📁 Тип: <b>{type_text}</b>\n"
+            f"⭐ Рейтинг Кинопоиска: <b>{rating}</b>\n"
+            f"🌍 Страна: <b>{countries}</b>\n"
+            f"🎭 Жанр: <b>{genres}</b>\n"
+            f"{premiere_info}"
+            f"\n📝 <b>Описание:</b>\n<i>{description}</i>\n\n"
+            f"🎥 <b>Режиссер:</b>\n{directors}\n\n"
+            f"👥 <b>Актеры:</b>\n{actors}\n\n"
+            f"🔗 <a href='{kp_url}'>Кинопоиск</a>"
+        )
+        
+        return card, get_opinion_button(movie_id)
+        
+    except Exception as e:
+        logger.error(f"Ошибка форматирования карточки: {e}")
+        return None, None
 
 
 # ==================== ОСНОВНОЙ КЛАСС АДАПТЕРА ====================
@@ -162,7 +273,7 @@ class MaxAdapter:
         self.user_context = {}
 
         self._register_handlers()
-        logger.info("✅ MaxAdapter инициализирован с поддержкой кнопок")
+        logger.info("✅ MaxAdapter инициализирован с постерами")
 
     def _register_handlers(self):
         @self.dp.bot_started()
@@ -249,7 +360,6 @@ class MaxAdapter:
 
         limits = get_user_limits(user_id)
 
-        # Отправляем фото с подписью
         start_image_url = get_start_image_url()
         
         welcome_text = (
@@ -260,7 +370,6 @@ class MaxAdapter:
             f"👇 <b>Выбери действие:</b>"
         )
 
-        # Пробуем отправить с фото
         try:
             await event.message.answer_photo(
                 photo=start_image_url,
@@ -283,7 +392,6 @@ class MaxAdapter:
         user_id = event.callback.user.user_id
         logger.info(f"Callback от {user_id}: {payload}")
 
-        # Подтверждаем callback
         try:
             await event.callback.ack()
         except AttributeError:
@@ -292,7 +400,7 @@ class MaxAdapter:
             except AttributeError:
                 logger.warning("Не удалось подтвердить callback")
 
-        # Обработка пагинации
+        # Пагинация
         if payload.startswith("search_page_"):
             parts = payload.split("_")
             page = int(parts[2])
@@ -319,7 +427,7 @@ class MaxAdapter:
         # Основные команды
         if payload == "random":
             await event.message.answer("🎲 Ищу случайный фильм...")
-            await self._send_random_result(event.message.answer)
+            await self._send_random_result(event)
         elif payload == "search":
             self.user_context[user_id] = {'state': 'awaiting_search'}
             await event.message.answer("🔍 Введи название фильма:")
@@ -330,7 +438,7 @@ class MaxAdapter:
             self.user_context[user_id] = {'state': 'awaiting_person'}
             await event.message.answer("🎭 Введи имя актёра или режиссёра:")
         elif payload == "profile":
-            await self._send_profile(event.message.answer, user_id)
+            await self._send_profile(event, user_id)
         elif payload == "opinion_prompt":
             self.user_context[user_id] = {'state': 'awaiting_opinion'}
             await event.message.answer("🐾 Введи ID или название фильма:")
@@ -339,6 +447,50 @@ class MaxAdapter:
             await self._send_opinion_by_id(event, user_id, movie_id)
         else:
             await event.message.answer(f"🐾 Неизвестная команда: {payload}")
+
+
+    # ==================== ОТПРАВКА КАРТОЧКИ С ПОСТЕРОМ ====================
+    async def _send_movie_card(self, event, movie_details: dict, is_premiers: bool = False, query: str = None, is_person_search: bool = False):
+        """Отправляет карточку фильма с постером"""
+        if not movie_details:
+            await event.message.answer("😢 Не могу найти информацию о фильме.")
+            return
+
+        card_text, opinion_button = format_movie_card_max(
+            movie_details, 
+            is_premiers=is_premiers,
+            query=query,
+            is_person_search=is_person_search
+        )
+        
+        if not card_text:
+            await event.message.answer("😢 Не могу показать карточку.")
+            return
+
+        poster_url = movie_details.get('poster_url')
+        chat_id = event.message.chat_id if hasattr(event.message, 'chat_id') else None
+        
+        # Если есть постер и метод send_photo — отправляем фото
+        if poster_url and poster_url.startswith('http') and chat_id:
+            try:
+                if hasattr(self.bot, 'send_photo'):
+                    await self.bot.send_photo(
+                        chat_id=chat_id,
+                        photo=poster_url,
+                        caption=card_text,
+                        parse_mode="html",
+                        reply_markup=opinion_button
+                    )
+                    return
+            except Exception as e:
+                logger.warning(f"Не удалось отправить фото, отправляем текст: {e}")
+        
+        # Если не получилось — текст
+        await event.message.answer(
+            card_text,
+            parse_mode="html",
+            attachments=[opinion_button]
+        )
 
 
     # ==================== ПАГИНАЦИЯ ДЛЯ ПОИСКА ====================
@@ -372,13 +524,7 @@ class MaxAdapter:
         for movie_data in movies_list[start_idx:end_idx]:
             movie_details = get_movie_details(movie_data['id'])
             if movie_details:
-                card_text, _ = format_movie_card(movie_details)
-                if card_text:
-                    await event.message.answer(
-                        card_text,
-                        parse_mode='html',
-                        attachments=[get_opinion_button(movie_details['id'])]
-                    )
+                await self._send_movie_card(event, movie_details, query=current_query)
 
         if total_pages > 1:
             pagination = get_pagination_buttons(page, total_pages, "search", current_query)
@@ -414,13 +560,7 @@ class MaxAdapter:
         for movie_data in movies_list[start_idx:end_idx]:
             movie_details = get_movie_details(movie_data['id'])
             if movie_details:
-                card_text, _ = format_movie_card(movie_details, is_premiers=True)
-                if card_text:
-                    await event.message.answer(
-                        card_text,
-                        parse_mode='html',
-                        attachments=[get_opinion_button(movie_details['id'])]
-                    )
+                await self._send_movie_card(event, movie_details, is_premiers=True)
 
         if total_pages > 1:
             pagination = get_pagination_buttons(page, total_pages, "premiers", "")
@@ -457,13 +597,7 @@ class MaxAdapter:
         for movie_data in movies_list[start_idx:end_idx]:
             movie_details = get_movie_details(movie_data['id'])
             if movie_details:
-                card_text, _ = format_movie_card(movie_details, is_person_search=True, query=current_query)
-                if card_text:
-                    await event.message.answer(
-                        card_text,
-                        parse_mode='html',
-                        attachments=[get_opinion_button(movie_details['id'])]
-                    )
+                await self._send_movie_card(event, movie_details, is_person_search=True, query=current_query)
 
         if total_pages > 1:
             pagination = get_pagination_buttons(page, total_pages, "person", current_query)
@@ -474,28 +608,17 @@ class MaxAdapter:
 
     async def _handle_random(self, event: MessageCreated):
         await event.message.answer("🎲 Ищу случайный фильм...")
-        await self._send_random_result(event.message.answer)
-
-    async def _send_random_result(self, send_func):
+        
         movie_data = get_random_movie_from_db(min_rating=7.0, is_new_only=False)
         if not movie_data:
-            await send_func("😢 Не нашла фильмов.")
+            await event.message.answer("😢 Не нашла фильмов.")
             return
 
         movie_details = get_movie_details(movie_data['id'])
-        if not movie_details:
-            await send_func("😢 Не могу найти информацию о фильме.")
-            return
-
-        card_text, _ = format_movie_card(movie_details)
-        if card_text:
-            await send_func(
-                card_text,
-                parse_mode='html',
-                attachments=[get_opinion_button(movie_details['id'])]
-            )
+        if movie_details:
+            await self._send_movie_card(event, movie_details)
         else:
-            await send_func("😢 Не могу показать карточку.")
+            await event.message.answer("😢 Не могу найти информацию о фильме.")
 
 
     async def _handle_premiers(self, event: MessageCreated):
@@ -513,12 +636,12 @@ class MaxAdapter:
 
 
     async def _handle_profile(self, event: MessageCreated):
-        await self._send_profile(event.message.answer, event.message.sender.user_id)
+        await self._send_profile(event, event.message.sender.user_id)
 
-    async def _send_profile(self, send_func, user_id: int):
+    async def _send_profile(self, event, user_id: int):
         limits = get_user_limits(user_id)
         stats = get_user_stats(user_id, date.today().isoformat())
-        await send_func(
+        await event.message.answer(
             f"👤 <b>Твой профиль</b>\n\n"
             f"📊 Тариф: {limits.get('tariff_name', 'Щенячий азарт')}\n"
             f"🎬 Мнений сегодня: {stats.get('opinion_count', 0)}/{limits.get('opinion_limit', 3)}\n"
@@ -528,7 +651,7 @@ class MaxAdapter:
         )
 
 
-    # ==================== МНЕНИЕ О ФИЛЬМЕ (КАК В TG) ====================
+    # ==================== МНЕНИЕ О ФИЛЬМЕ ====================
     async def _handle_opinion_command(self, event: MessageCreated):
         user_id = event.message.sender.user_id
         text = event.message.body.text.replace('/opinion', '').strip()
@@ -539,12 +662,13 @@ class MaxAdapter:
                 "• /opinion Зеленая миля — по названию"
             )
             return
-        await self._process_opinion(event, user_id, text, event.message.answer)
+        await self._process_opinion(event, user_id, text)
 
     async def _send_opinion_by_id(self, event, user_id: int, movie_id: int):
-        await self._process_opinion(event, user_id, str(movie_id), event.message.answer)
+        await self._process_opinion(event, user_id, str(movie_id))
 
-    async def _process_opinion(self, event, user_id: int, query: str, send_func):
+    async def _process_opinion(self, event, user_id: int, query: str):
+        send_func = event.message.answer
         limits = get_user_limits(user_id)
         stats = get_user_stats(user_id, date.today().isoformat())
 
@@ -572,10 +696,8 @@ class MaxAdapter:
         movie_name = movie_details.get('name', 'Без названия')
         movie_year = movie_details.get('year', '')
 
-        # Проверяем кэш
         cached = get_cached_opinion(movie_id)
         if cached:
-            # Форматируем мнение как в TG
             formatted_opinion = self._format_opinion(cached, movie_name, movie_year, movie_id)
             await send_func(formatted_opinion, parse_mode="html")
             increment_stat_counter(user_id, 'opinion_count')
@@ -592,13 +714,10 @@ class MaxAdapter:
             opinion_data = await self._generate_opinion(movie_details)
             if opinion_data:
                 full_opinion = opinion_data['full_opinion']
-                short_opinion = opinion_data.get('short_opinion', '')
-                
                 save_opinion_cache(movie_id, full_opinion)
                 increment_stat_counter(user_id, 'opinion_count')
                 record_user_opinion(user_id, movie_id)
                 
-                # Форматируем как в TG
                 formatted_opinion = self._format_opinion(full_opinion, movie_name, movie_year, movie_id)
                 await send_func(formatted_opinion, parse_mode="html")
             else:
@@ -608,28 +727,20 @@ class MaxAdapter:
             await send_func("🐾 Гав! Что-то пошло не так. Попробуй позже!")
 
     def _format_opinion(self, opinion: str, movie_name: str, movie_year: str, movie_id: int) -> str:
-        """Форматирует мнение как в TG-версии"""
         kp_url = f"https://www.kinopoisk.ru/film/{movie_id}/"
         title_with_link = f"<a href='{kp_url}'><b>{movie_name}</b></a> ({movie_year})"
-        
         return f"Я посмотрела {title_with_link}, и вот что думаю:\n\n{opinion}\n\n🐾"
 
-
     async def _generate_opinion(self, movie_details: dict) -> dict:
-        """Генерирует мнение как в TG-версии с полным промтом"""
-        
         title = movie_details.get('name', 'Без названия')
         year = movie_details.get('year', '')
         
-        # Страны
         countries = movie_details.get('countries', [])
         countries_str = ', '.join(countries) if countries else 'неизвестно'
         
-        # Жанры
         genres = movie_details.get('genres', [])
         genres_str = ', '.join(genres) if genres else 'неизвестно'
         
-        # Режиссеры
         directors_list = movie_details.get('directors', [])
         if directors_list:
             director_names = []
@@ -641,7 +752,6 @@ class MaxAdapter:
         else:
             directors_str = 'неизвестен'
         
-        # Актеры (первые 7)
         actors_list = movie_details.get('actors', [])[:7]
         if actors_list:
             actor_names = []
@@ -653,15 +763,11 @@ class MaxAdapter:
         else:
             actors_str = 'не указаны'
         
-        # Рейтинг
         rating = movie_details.get('rating', 0)
-        
-        # Описание
         description = movie_details.get('description', 'Описание отсутствует')
         if description and len(description) > 800:
             description = description[:800] + '...'
-        
-        # Формируем промт как в TG-версии
+
         prompt = f"""Ты — КиноИщейка, собака-девочка, кинокритик с отличным чутьем на хорошее кино. Ты смотришь фильмы и делишься своим мнением с юмором и энтузиазмом. Говори о себе в женском роде.
 
 Информация о фильме:
@@ -717,24 +823,15 @@ class MaxAdapter:
 
         full_response = response.choices[0].message.content.strip()
         
-        # Парсим ответ AI
         short_opinion = ""
-        mood_tags = ""
-        atmosphere_tags = ""
-                     
         for part in full_response.split('\n'):
             if part.startswith("Оценка:"):
                 short_opinion = part
-            elif part.startswith("Настроение:"):
-                mood_tags = part.replace("Настроение:", "").strip()
-            elif part.startswith("Атмосфера:"):
-                atmosphere_tags = part.replace("Атмосфера:", "").strip()
+                break
         
         return {
             'full_opinion': full_response,
-            'short_opinion': short_opinion,
-            'mood_tags': mood_tags,
-            'atmosphere_tags': atmosphere_tags
+            'short_opinion': short_opinion
         }
 
 
@@ -754,7 +851,7 @@ class MaxAdapter:
         elif state == 'awaiting_person':
             await self._perform_person_search(event, user_id, text)
         elif state == 'awaiting_opinion':
-            await self._process_opinion(event, user_id, text, event.message.answer)
+            await self._process_opinion(event, user_id, text)
             self.user_context.pop(user_id, None)
         else:
             await event.message.answer("🐾 Я не понимаю эту команду.\n\nИспользуй /start для меню.")
@@ -774,7 +871,6 @@ class MaxAdapter:
             self.user_context.pop(user_id, None)
             return
 
-        # Сохраняем в контекст
         self.user_context[user_id] = {
             'movies': movies_list,
             'query': query
@@ -796,7 +892,6 @@ class MaxAdapter:
             self.user_context.pop(user_id, None)
             return
 
-        # Сохраняем в контекст
         self.user_context[user_id] = {
             'person_movies': movies_list,
             'person_query': query
@@ -806,7 +901,7 @@ class MaxAdapter:
 
     # ==================== ЗАПУСК ====================
     async def run(self):
-        logger.info("🚀 MaxAdapter запущен с пагинацией и красивыми мнениями")
+        logger.info("🚀 MaxAdapter запущен с постерами")
         await self.bot.delete_webhook()
         await self.dp.start_polling(self.bot)
 
