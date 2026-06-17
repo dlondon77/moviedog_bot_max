@@ -1,4 +1,4 @@
-# core/max_adapter.py — с постерами в карточках
+# core/max_adapter.py — с постерами (исправленная версия)
 
 import logging
 import configparser
@@ -148,16 +148,11 @@ def get_start_image_url():
 
 # ==================== РАСШИРЕННАЯ КАРТОЧКА ФИЛЬМА ДЛЯ MAX ====================
 def format_movie_card_max(movie: dict, is_premiers: bool = False, query: str = None, is_person_search: bool = False) -> tuple:
-    """
-    Форматирует карточку фильма для MAX с полным описанием,
-    всеми актёрами/режиссёрами.
-    Возвращает (текст_карточки, кнопка_мнения)
-    """
+    """Форматирует карточку фильма для MAX с полным описанием и всеми актёрами/режиссёрами."""
     if not movie or not isinstance(movie, dict):
         return None, None
 
     try:
-        # Основные данные
         title = movie.get('name', 'Без названия') or 'отсутствует'
         year = str(movie.get('year', '')) if movie.get('year') else 'отсутствует'
         is_new = movie.get('is_new_release', False)
@@ -165,7 +160,6 @@ def format_movie_card_max(movie: dict, is_premiers: bool = False, query: str = N
         
         year_display = f"({year}) 🆕" if is_new else f"({year})"
         
-        # Тип фильма
         content_type = movie.get('movie_type', 'movie')
         type_mapping = {
             'movie': 'фильм',
@@ -175,19 +169,14 @@ def format_movie_card_max(movie: dict, is_premiers: bool = False, query: str = N
         }
         type_text = type_mapping.get(content_type, 'фильм')
         
-        # Рейтинг
         rating = round(movie.get('rating', 0), 1) if movie.get('rating') else "отсутствует"
-        
-        # Страны и жанры
         countries = ', '.join(movie.get('countries', [])) if movie.get('countries') else 'отсутствует'
         genres = ', '.join(movie.get('genres', [])) if movie.get('genres') else 'отсутствует'
         
-        # ОПИСАНИЕ — ПОЛНОЕ
         description = movie.get('description', '')
         if not description or description == 'null' or description == 'None':
             description = 'Описание отсутствует'
         
-        # Режиссеры — ВСЕ
         directors_list = []
         for director in movie.get('directors', []):
             director_name = director.get('name', '') or director.get('enName', '')
@@ -199,7 +188,6 @@ def format_movie_card_max(movie: dict, is_premiers: bool = False, query: str = N
                 directors_list.append(director_name)
         directors = ',\n'.join(directors_list) if directors_list else 'отсутствует'
         
-        # Актеры — ВСЕ
         actors_list = []
         for actor in movie.get('actors', []):
             actor_name = actor.get('name', '') or actor.get('enName', '')
@@ -211,7 +199,6 @@ def format_movie_card_max(movie: dict, is_premiers: bool = False, query: str = N
                 actors_list.append(actor_name)
         actors = ',\n'.join(actors_list) if actors_list else 'отсутствует'
         
-        # Премьеры для новинок
         premiere_info = ""
         if is_premiers or movie.get('is_new_release'):
             premiere_russia = movie.get('premiere_russia')
@@ -236,10 +223,8 @@ def format_movie_card_max(movie: dict, is_premiers: bool = False, query: str = N
                 f"👥 Ожидают: <b>{int(await_count) if await_count else 0}</b> чел.\n"
             )
         
-        # Ссылка на Кинопоиск
         kp_url = f"https://www.kinopoisk.ru/film/{movie_id}/" if movie_id else "https://www.kinopoisk.ru/"
         
-        # Формируем карточку с отступами
         card = (
             f"<a href='{kp_url}'><b>{title}</b></a> {year_display}\n"
             f"📁 Тип: <b>{type_text}</b>\n"
@@ -427,24 +412,39 @@ class MaxAdapter:
         # Основные команды
         if payload == "random":
             await event.message.answer("🎲 Ищу случайный фильм...")
-            await self._send_random_result(event)
+            movie_data = get_random_movie_from_db(min_rating=7.0, is_new_only=False)
+            if not movie_data:
+                await event.message.answer("😢 Не нашла фильмов.")
+                return
+            movie_details = get_movie_details(movie_data['id'])
+            if movie_details:
+                await self._send_movie_card(event, movie_details)
+            else:
+                await event.message.answer("😢 Не могу найти информацию о фильме.")
+        
         elif payload == "search":
             self.user_context[user_id] = {'state': 'awaiting_search'}
             await event.message.answer("🔍 Введи название фильма:")
+        
         elif payload == "premiers":
             await event.message.answer("🎉 Ищу ожидаемые премьеры...")
             await self._handle_premiers_search(event, user_id)
+        
         elif payload == "person":
             self.user_context[user_id] = {'state': 'awaiting_person'}
             await event.message.answer("🎭 Введи имя актёра или режиссёра:")
+        
         elif payload == "profile":
             await self._send_profile(event, user_id)
+        
         elif payload == "opinion_prompt":
             self.user_context[user_id] = {'state': 'awaiting_opinion'}
             await event.message.answer("🐾 Введи ID или название фильма:")
+        
         elif payload.startswith("opinion_"):
             movie_id = int(payload.split("_")[1])
             await self._send_opinion_by_id(event, user_id, movie_id)
+        
         else:
             await event.message.answer(f"🐾 Неизвестная команда: {payload}")
 
@@ -470,7 +470,6 @@ class MaxAdapter:
         poster_url = movie_details.get('poster_url')
         chat_id = event.message.chat_id if hasattr(event.message, 'chat_id') else None
         
-        # Если есть постер и метод send_photo — отправляем фото
         if poster_url and poster_url.startswith('http') and chat_id:
             try:
                 if hasattr(self.bot, 'send_photo'):
@@ -485,7 +484,6 @@ class MaxAdapter:
             except Exception as e:
                 logger.warning(f"Не удалось отправить фото, отправляем текст: {e}")
         
-        # Если не получилось — текст
         await event.message.answer(
             card_text,
             parse_mode="html",
