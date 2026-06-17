@@ -1,4 +1,4 @@
-# core/max_adapter.py — ИСПРАВЛЕННАЯ ВЕРСИЯ (user.id → user.user_id)
+# core/max_adapter.py — ИСПРАВЛЕННАЯ ВЕРСИЯ (event.callback.ack())
 
 import logging
 import configparser
@@ -245,10 +245,18 @@ class MaxAdapter:
 
     async def _handle_callback(self, event):
         payload = event.callback.payload
-        user_id = event.callback.user.user_id  # ← ИСПРАВЛЕНО: .user.user_id вместо .user.id
+        user_id = event.callback.user.user_id
         logger.info(f"Callback от {user_id}: {payload}")
 
-        await event.callback.answer()
+        # Подтверждаем callback (ack — acknowledge)
+        try:
+            await event.callback.ack()
+        except AttributeError:
+            logger.warning("Метод ack() не найден, пробуем send_answer()")
+            try:
+                await event.callback.send_answer()
+            except AttributeError:
+                logger.warning("Не удалось подтвердить callback, продолжаем без подтверждения")
 
         if payload == "random":
             await self._handle_random_mock(user_id)
