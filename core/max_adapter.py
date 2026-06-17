@@ -1,4 +1,4 @@
-# core/max_adapter.py — РАБОЧАЯ ВЕРСИЯ С КНОПКАМИ (через свой класс)
+# core/max_adapter.py — ИСПРАВЛЕННАЯ ВЕРСИЯ (user.id → user.user_id)
 
 import logging
 import configparser
@@ -95,9 +95,8 @@ else:
 
 # ==================== СВОЙ КЛАСС КЛАВИАТУРЫ ====================
 class InlineKeyboardMarkup:
-    """Свой класс клавиатуры, который даёт .model_dump() как требует maxapi"""
     def __init__(self, buttons):
-        self.buttons = buttons  # список списков словарей
+        self.buttons = buttons
 
     def model_dump(self):
         return {
@@ -110,7 +109,6 @@ class InlineKeyboardMarkup:
 
 # ==================== ФУНКЦИИ СОЗДАНИЯ КЛАВИАТУР ====================
 def get_main_menu():
-    """Главное меню с кнопками"""
     buttons = [
         [
             {"type": "callback", "text": "🎲 Случайный фильм", "payload": "random"},
@@ -128,7 +126,6 @@ def get_main_menu():
     return InlineKeyboardMarkup(buttons)
 
 def get_opinion_button(movie_id: int):
-    """Кнопка 'Мнение о фильме' для карточки"""
     buttons = [
         [{"type": "callback", "text": "🐾 Мнение о фильме", "payload": f"opinion_{movie_id}"}]
     ]
@@ -242,16 +239,16 @@ class MaxAdapter:
             f"🎬 <b>Мнений сегодня:</b> 0/{limits.get('opinion_limit', 3)}\n\n"
             f"👇 <b>Выбери действие:</b>",
             parse_mode="html",
-            attachments=[get_main_menu()]  # ← передаём объект класса с .model_dump()
+            attachments=[get_main_menu()]
         )
 
 
     async def _handle_callback(self, event):
         payload = event.callback.payload
-        user_id = event.callback.user.id
+        user_id = event.callback.user.user_id  # ← ИСПРАВЛЕНО: .user.user_id вместо .user.id
         logger.info(f"Callback от {user_id}: {payload}")
 
-        await event.callback.answer()  # обязательно!
+        await event.callback.answer()
 
         if payload == "random":
             await self._handle_random_mock(user_id)
@@ -275,7 +272,7 @@ class MaxAdapter:
             await self.bot.send_message(chat_id=user_id, text=f"🐾 Неизвестная команда: {payload}")
 
 
-    # ==================== ОБРАБОТЧИКИ КОМАНД ====================
+    # ==================== ВСЕ ОСТАЛЬНЫЕ МЕТОДЫ (БЕЗ ИЗМЕНЕНИЙ) ====================
 
     async def _handle_random(self, event: MessageCreated):
         await event.message.answer("🎲 Ищу случайный фильм...")
