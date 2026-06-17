@@ -1,4 +1,4 @@
-# core/max_adapter.py — ИСПРАВЛЕННАЯ ВЕРСИЯ (event.callback.ack())
+# core/max_adapter.py — ФИНАЛЬНАЯ РАБОЧАЯ ВЕРСИЯ С КНОПКАМИ
 
 import logging
 import configparser
@@ -248,47 +248,51 @@ class MaxAdapter:
         user_id = event.callback.user.user_id
         logger.info(f"Callback от {user_id}: {payload}")
 
-        # Подтверждаем callback (ack — acknowledge)
+        # Подтверждаем callback
         try:
             await event.callback.ack()
         except AttributeError:
-            logger.warning("Метод ack() не найден, пробуем send_answer()")
             try:
                 await event.callback.send_answer()
             except AttributeError:
                 logger.warning("Не удалось подтвердить callback, продолжаем без подтверждения")
 
         if payload == "random":
-            await self._handle_random_mock(user_id)
+            await event.message.answer("🎲 Ищу случайный фильм...")
+            await self._send_random_result(event.message.answer)
+        
         elif payload == "search":
             self.user_context[user_id] = {'state': 'awaiting_search'}
-            await self.bot.send_message(chat_id=user_id, text="🔍 Введи название фильма:")
+            await event.message.answer("🔍 Введи название фильма:")
+        
         elif payload == "premiers":
-            await self._handle_premiers_mock(user_id)
+            await event.message.answer("🎉 Ищу ожидаемые премьеры...")
+            await self._send_premiers(event.message.answer)
+        
         elif payload == "person":
             self.user_context[user_id] = {'state': 'awaiting_person'}
-            await self.bot.send_message(chat_id=user_id, text="🎭 Введи имя актёра или режиссёра:")
+            await event.message.answer("🎭 Введи имя актёра или режиссёра:")
+        
         elif payload == "profile":
-            await self._handle_profile_mock(user_id)
+            await self._send_profile(event.message.answer, user_id)
+        
         elif payload == "opinion_prompt":
             self.user_context[user_id] = {'state': 'awaiting_opinion'}
-            await self.bot.send_message(chat_id=user_id, text="🐾 Введи ID или название фильма:")
+            await event.message.answer("🐾 Введи ID или название фильма:")
+        
         elif payload.startswith("opinion_"):
             movie_id = int(payload.split("_")[1])
-            await self._send_opinion_by_id(user_id, movie_id)
+            await self._send_opinion_by_id(event, user_id, movie_id)
+        
         else:
-            await self.bot.send_message(chat_id=user_id, text=f"🐾 Неизвестная команда: {payload}")
+            await event.message.answer(f"🐾 Неизвестная команда: {payload}")
 
 
-    # ==================== ВСЕ ОСТАЛЬНЫЕ МЕТОДЫ (БЕЗ ИЗМЕНЕНИЙ) ====================
+    # ==================== ОБРАБОТЧИКИ КОМАНД ====================
 
     async def _handle_random(self, event: MessageCreated):
         await event.message.answer("🎲 Ищу случайный фильм...")
         await self._send_random_result(event.message.answer)
-
-    async def _handle_random_mock(self, user_id: int):
-        await self.bot.send_message(chat_id=user_id, text="🎲 Ищу случайный фильм...")
-        await self._send_random_result(lambda text, **kwargs: self.bot.send_message(chat_id=user_id, text=text, **kwargs))
 
     async def _send_random_result(self, send_func):
         movie_data = get_random_movie_from_db(min_rating=7.0, is_new_only=False)
@@ -313,13 +317,10 @@ class MaxAdapter:
 
 
     async def _handle_premiers(self, event: MessageCreated):
+        await event.message.answer("🎉 Ищу ожидаемые премьеры...")
         await self._send_premiers(event.message.answer)
 
-    async def _handle_premiers_mock(self, user_id: int):
-        await self._send_premiers(lambda text, **kwargs: self.bot.send_message(chat_id=user_id, text=text, **kwargs))
-
     async def _send_premiers(self, send_func):
-        await send_func("🎉 Ищу ожидаемые премьеры...")
         premiers_list = get_premier_movies_from_db()
         if not premiers_list:
             await send_func("😢 Сейчас нет ожидаемых премьер.")
@@ -342,9 +343,6 @@ class MaxAdapter:
 
     async def _handle_profile(self, event: MessageCreated):
         await self._send_profile(event.message.answer, event.message.sender.user_id)
-
-    async def _handle_profile_mock(self, user_id: int):
-        await self._send_profile(lambda text, **kwargs: self.bot.send_message(chat_id=user_id, text=text, **kwargs), user_id)
 
     async def _send_profile(self, send_func, user_id: int):
         limits = get_user_limits(user_id)
@@ -369,12 +367,12 @@ class MaxAdapter:
                 "• /opinion Зеленая миля — по названию"
             )
             return
-        await self._process_opinion(user_id, text, event.message.answer)
+        await self._process_opinion(event, user_id, text, event.message.answer)
 
-    async def _send_opinion_by_id(self, user_id: int, movie_id: int):
-        await self._process_opinion(user_id, str(movie_id), lambda text, **kwargs: self.bot.send_message(chat_id=user_id, text=text, **kwargs))
+    async def _send_opinion_by_id(self, event, user_id: int, movie_id: int):
+        await self._process_opinion(event, user_id, str(movie_id), event.message.answer)
 
-    async def _process_opinion(self, user_id: int, query: str, send_func):
+    async def _process_opinion(self, event, user_id: int, query: str, send_func):
         limits = get_user_limits(user_id)
         stats = get_user_stats(user_id, date.today().isoformat())
 
@@ -436,6 +434,7 @@ class MaxAdapter:
             logger.error(f"Ошибка генерации: {e}")
             await send_func("🐾 Гав! Что-то пошло не так. Попробуй позже!")
 
+
     async def _generate_opinion(self, movie_details: dict) -> str:
         title = movie_details.get('name', 'Без названия')
         year = movie_details.get('year', '')
@@ -476,6 +475,8 @@ class MaxAdapter:
         return response.choices[0].message.content.strip()
 
 
+    # ==================== ОБРАБОТКА ТЕКСТОВЫХ СООБЩЕНИЙ ====================
+
     async def _handle_message(self, event: MessageCreated):
         user_id = event.message.sender.user_id
         text = event.message.body.text if event.message.body else ""
@@ -490,7 +491,7 @@ class MaxAdapter:
         elif state == 'awaiting_person':
             await self._perform_person_search(event, user_id, text)
         elif state == 'awaiting_opinion':
-            await self._process_opinion(user_id, text, event.message.answer)
+            await self._process_opinion(event, user_id, text, event.message.answer)
             self.user_context.pop(user_id, None)
         else:
             await event.message.answer("🐾 Я не понимаю эту команду.\n\nИспользуй /start для меню.")
