@@ -234,7 +234,7 @@ class MaxAdapter:
         username = getattr(event.message.sender, 'username', '') or ''
         first_name = getattr(event.message.sender, 'first_name', '') or ''
         last_name = getattr(event.message.sender, 'last_name', '') or ''
-
+    
         try:
             register_user(
                 user_id=user_id,
@@ -246,12 +246,9 @@ class MaxAdapter:
             logger.info(f"✅ Пользователь {user_id} зарегистрирован")
         except Exception as e:
             logger.error(f"Ошибка регистрации: {e}")
-
+    
         limits = get_user_limits(user_id)
-
-        # Отправляем фото с подписью
-        start_image_url = get_start_image_url()
-        
+    
         welcome_text = (
             f"🐾 <b>Гав! Я - КиноИщейка!</b> Добро пожаловать в мир кино! 🎬\n\n"
             f"Я помогу тебе найти фильмы, сериалы и мультфильмы на Кинопоиске, которые ты точно полюбишь.\n\n"
@@ -259,11 +256,11 @@ class MaxAdapter:
             f"🎬 <b>Мнений сегодня:</b> 0/{limits.get('opinion_limit', 3)}\n\n"
             f"👇 <b>Выбери действие:</b>"
         )
-
-        # Пробуем отправить с фото
+    
+        # Отправляем фото с подписью и клавиатурой
         try:
             await event.message.answer_photo(
-                photo=start_image_url,
+                photo=get_start_image_url(),
                 caption=welcome_text,
                 parse_mode="html",
                 attachments=[get_main_menu()]
