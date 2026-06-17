@@ -249,30 +249,44 @@ class MaxAdapter:
     
         limits = get_user_limits(user_id)
     
-        welcome_text = (
-            f"🐾 <b>Гав! Я - КиноИщейка!</b> Добро пожаловать в мир кино! 🎬\n\n"
-            f"Я помогу тебе найти фильмы, сериалы и мультфильмы на Кинопоиске, которые ты точно полюбишь.\n\n"
-            f"📊 <b>Твой тариф:</b> {limits.get('tariff_name', 'Щенячий азарт')}\n"
-            f"🎬 <b>Мнений сегодня:</b> 0/{limits.get('opinion_limit', 3)}\n\n"
-            f"👇 <b>Выбери действие:</b>"
+        # === ТЕКСТ КАК В TELEGRAM (адаптирован для Max) ===
+        start_text = (
+            "🐾 <b>Гав! Я - КиноИщейка!</b> Добро пожаловать в мир кино! 🎬\n\n"
+            "Я помогу тебе найти фильмы, сериалы и мультфильмы на Кинопоиске, которые ты точно полюбишь.\n\n"
+            "📊 <b>Твой тариф:</b> {tariff}\n"
+            "🎬 <b>Мнений сегодня:</b> 0/{limit}\n\n"
+            "<b>Вот что я умею:</b>\n\n"
+            "🎲 <b>Случайный фильм</b> — найду следы случайного фильма\n"
+            "🔍 <b>Поиск</b> — найду отборные фильмы по ключевым ориентировкам в названии\n"
+            "🎉 <b>Премьеры</b> — учуяю свежие ожидаемые премьеры\n"
+            "🎭 <b>Поиск по актёрам</b> — найду фильмы по запахам актеров или режиссеров\n"
+            "🐾 <b>Мнение о фильме</b> — расскажу о смысле фильма, его настроении и атмосфере, укажу на плюсы и минусы и поставлю оценку\n\n"
+            "👇 <b>Выбери действие в меню ниже:</b>"
+        ).format(
+            tariff=limits.get('tariff_name', 'Щенячий азарт'),
+            limit=limits.get('opinion_limit', 3)
         )
     
-        # Отправляем фото с подписью и клавиатурой
+        # Пробуем отправить с фото
+        photo_url = get_start_image_url()
+        
         try:
-            await event.message.answer_photo(
-                photo=get_start_image_url(),
-                caption=welcome_text,
+            # Отправляем фото + текст + клавиатуру
+            await event.message.answer(
+                start_text,
                 parse_mode="html",
-                attachments=[get_main_menu()]
+                attachments=[
+                    {"type": "photo", "payload": {"url": photo_url}},
+                    get_main_menu()
+                ]
             )
         except Exception as e:
-            logger.warning(f"Не удалось отправить фото, отправляем текст: {e}")
+            logger.warning(f"Не удалось отправить с фото, отправляем текст: {e}")
             await event.message.answer(
-                welcome_text,
+                start_text,
                 parse_mode="html",
                 attachments=[get_main_menu()]
             )
-
 
     # ==================== ОБРАБОТЧИК КНОПОК ====================
     async def _handle_callback(self, event):
