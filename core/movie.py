@@ -338,23 +338,32 @@ def format_movie_card(movie, is_premiers=False, query=None, is_person_search=Fal
         genres = ', '.join(movie.get('genres', [])) if movie.get('genres') else 'отсутствует'
         description = movie.get('description', 'отсутствует') or 'отсутствует'
         
-        if len(description) > 500:
-            description = description[:500] + '...'
-        
-        # Режиссеры
+        # ===== РЕЖИССЕРЫ (ВСЕ) =====
         directors_list = []
         for director in movie.get('directors', []):
             director_name = director.get('name', '') or director.get('enName', '')
+            director_id = director.get('id', '')
+            
             if director_name:
+                if is_person_search and director_id and query and query.lower() in director_name.lower():
+                    director_url = f"https://www.kinopoisk.ru/name/{director_id}/"
+                    director_name = f"<a href='{director_url}'>{director_name}</a>"
                 directors_list.append(director_name)
+        
         directors = ', '.join(directors_list) if directors_list else 'отсутствует'
         
-        # Актеры (первые 5 для краткости)
+        # ===== АКТЁРЫ (ВСЕ) =====
         actors_list = []
-        for actor in movie.get('actors', [])[:5]:
+        for actor in movie.get('actors', []):
             actor_name = actor.get('name', '') or actor.get('enName', '')
+            actor_id = actor.get('id', '')
+            
             if actor_name:
+                if is_person_search and actor_id and query and query.lower() in actor_name.lower():
+                    actor_url = f"https://www.kinopoisk.ru/name/{actor_id}/"
+                    actor_name = f"<a href='{actor_url}'>{actor_name}</a>"
                 actors_list.append(actor_name)
+        
         actors = ', '.join(actors_list) if actors_list else 'отсутствует'
         
         # Премьеры для новинок
@@ -377,33 +386,34 @@ def format_movie_card(movie, is_premiers=False, query=None, is_person_search=Fal
                     return 'отсутствует'
             
             premiere_info = (
-                f"🎉 Премьера РФ: <b>{format_premiere_date(premiere_russia)}</b>\n"
+                f"\n🎉 Премьера РФ: <b>{format_premiere_date(premiere_russia)}</b>\n"
                 f"🌎 Премьера Мир: <b>{format_premiere_date(premiere_world)}</b>\n"
                 f"👥 Ожидают: <b>{int(await_count) if await_count else 0}</b> чел.\n"
             )
         
+        poster_url = movie.get('poster_url', f"https://st.kp.yandex.net/images/film_big/{movie_id}.jpg")
         kp_url = f"https://www.kinopoisk.ru/film/{movie_id}/" if movie_id else "https://www.kinopoisk.ru/"
-     
+        
+        # ===== КАРТОЧКА С ОТСТУПАМИ =====
         card = (
-            f"🎬 <b>{title}</b> {year_display}\n"
+            f"🎬 <a href='{kp_url}'><b>{title}</b></a> {year_display}\n"
             f"📁 Тип: <b>{type_text}</b>\n"
             f"⭐ Рейтинг Кинопоиска: <b>{rating}</b>\n"
             f"🌍 Страна: <b>{countries}</b>\n"
             f"🎭 Жанр: <b>{genres}</b>\n"
-            f"{premiere_info}"
-            f"📝 Описание: <i>{description}</i>\n"
-            f"🎥 Режиссер: <b>{directors}</b>\n"
-            f"👥 Актеры: <b>{actors}</b>\n\n"
-            f"🔗 <a href='{kp_url}'>Кинопоиск</a>"
+            f"{premiere_info}\n"  # ← пустая строка перед описанием
+            f"📝 <b>Описание:</b>\n<i>{description}</i>\n\n"  # ← отдельная строка с описанием
+            f"🎥 <b>Режиссер:</b> {directors}\n"
+            f"👥 <b>Актеры:</b> {actors}\n"
         )
         
-        # Для Max возвращаем None вместо клавиатуры
+        # Для Max возвращаем None вместо клавиатуры (кнопки добавляются в адаптере)
         return card, None
         
     except Exception as e:
         logger.error(f"Ошибка форматирования карточки фильма: {e}")
         return None, None
-
+        
 def search_movies_with_filters(query, filters=None, count_only=False):
     """
     Поиск фильмов с фильтрами, используя существующий search_movies_in_db
