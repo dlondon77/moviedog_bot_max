@@ -1,8 +1,9 @@
-# core/max_adapter.py — С КРАСИВЫМИ ПРЕВЬЮ (ссылками на Кинопоиск)
+# core/max_adapter.py — ПОЛНАЯ ФИНАЛЬНАЯ ВЕРСИЯ
+# + Полная карточка фильма (описание, актёры, режиссёры)
+# + В мнении — ссылка на Кинопоиск (красивое превью)
+# + Пагинация по обращениям (как в TG)
 # + Тарифы как в TG (без цен)
-# + Обратная связь (полный цикл)
-# + FAQ
-# + Кнопки "Ещё" и "В главное меню"
+# + FAQ и Обратная связь
 
 import logging
 import configparser
@@ -38,6 +39,7 @@ record_user_opinion = user_module.record_user_opinion
 
 get_random_movie_from_db = movie_module.get_random_movie_from_db
 get_movie_details = movie_module.get_movie_details
+format_movie_card = movie_module.format_movie_card
 search_movies_in_db = movie_module.search_movies_in_db
 search_movies_by_person_in_db = movie_module.search_movies_by_person_in_db
 get_premier_movies_from_db = movie_module.get_premier_movies_from_db
@@ -206,16 +208,20 @@ def get_faq_menu():
     ]
     return InlineKeyboardMarkup(buttons)
 
-
-# ==================== ФОРМАТИРОВАНИЕ КАРТОЧКИ (ТОЛЬКО ССЫЛКА) ====================
-def get_movie_link(movie):
-    """Возвращает ссылку на Кинопоиск для красивого превью"""
-    if not movie or not isinstance(movie, dict):
-        return None
-    movie_id = movie.get('id')
-    if not movie_id:
-        return None
-    return f"https://www.kinopoisk.ru/film/{movie_id}/"
+def get_feedback_pagination_buttons(page: int, total_pages: int, prefix: str = "feedback"):
+    """Кнопки пагинации для обращений (как в TG)"""
+    buttons = []
+    row = []
+    if page > 0:
+        row.append({"type": "callback", "text": "⬅️ Назад", "payload": f"{prefix}_page_{page-1}"})
+    if page < total_pages - 1:
+        row.append({"type": "callback", "text": "Вперёд ➡️", "payload": f"{prefix}_page_{page+1}"})
+    if row:
+        buttons.append(row)
+    buttons.append([
+        {"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}
+    ])
+    return InlineKeyboardMarkup(buttons)
 
 
 # ==================== ОСНОВНОЙ КЛАСС АДАПТЕРА ====================
@@ -231,7 +237,7 @@ class MaxAdapter:
         self.user_context = {}
 
         self._register_handlers()
-        logger.info("✅ MaxAdapter инициализирован (с красивыми превью)")
+        logger.info("✅ MaxAdapter инициализирован (финальная версия)")
 
     def _register_handlers(self):
         @self.dp.bot_started()
@@ -388,6 +394,12 @@ class MaxAdapter:
             await self._handle_feedback_callback(event, user_id, payload)
             return
 
+        # Пагинация обращений
+        if payload.startswith("feedback_page_"):
+            page = int(payload.split("_")[2])
+            await self._show_user_feedback(event, user_id, page)
+            return
+
         if payload == "back_to_menu":
             self.user_context.pop(user_id, None)
             await event.message.answer(
@@ -511,12 +523,15 @@ class MaxAdapter:
             return
 
         if payload == "feedback_list":
-            await self._show_user_feedback(event, user_id)
+            await self._show_user_feedback(event, user_id, 0)
             return
 
         await event.message.answer("🐾 Возвращаюсь в меню обратной связи", attachments=[get_feedback_menu()])
 
-    async def _show_user_feedback(self, event, user_id):
+    async def _show_user_feedback(self, event, user_id, page=0):
+        """Показывает обращения пользователя с пагинацией (как в TG)"""
+        items_per_page = 5
+        
         conn = db_module.get_opinions_db_connection()
         cursor = conn.cursor()
         cursor.execute('''
@@ -524,12 +539,11 @@ class MaxAdapter:
             FROM feedback 
             WHERE user_id = ? AND status != 'archive'
             ORDER BY created_at DESC
-            LIMIT 10
         ''', (user_id,))
-        feedback_list = cursor.fetchall()
+        all_feedback = cursor.fetchall()
         conn.close()
 
-        if not feedback_list:
+        if not all_feedback:
             await event.message.answer(
                 "🐾 У тебя пока нет обращений.\n\n"
                 "Ты можешь оставить отзыв или сообщить об ошибке через кнопку «📝 Обратная связь»",
@@ -537,11 +551,24 @@ class MaxAdapter:
             )
             return
 
+        total_items = len(all_feedback)
+        total_pages = (total_items + items_per_page - 1) // items_per_page
+
+        if page >= total_pages:
+            page = total_pages - 1
+        if page < 0:
+            page = 0
+
+        start_idx = page * items_per_page
+        end_idx = min(start_idx + items_per_page, total_items)
+        feedback_list = all_feedback[start_idx:end_idx]
+
         status_icons = {'new': '🆕', 'in_progress': '🔄', 'resolved': '✅'}
         type_names = {1: '🐛 Ошибка', 2: '📢 Отзыв'}
 
-        text = "📝 <b>Твои обращения</b>\n\n"
-        for fb in feedback_list[:5]:
+        text = f"📝 <b>Твои обращения</b> (стр. {page+1}/{total_pages})\n\n"
+        
+        for fb in feedback_list:
             fb_id, fb_type, movie_id, message, status, created_at, comment = fb
             status_icon = status_icons.get(status, '📌')
             type_name = type_names.get(fb_type, '📝')
@@ -557,14 +584,11 @@ class MaxAdapter:
                 text += f"📝 Ответ: {comment[:100]}\n"
             text += "\n"
 
-        if len(feedback_list) > 5:
-            text += f"... и ещё {len(feedback_list) - 5} обращений\n\n"
+        # Кнопки пагинации как в TG
+        pagination = get_feedback_pagination_buttons(page, total_pages)
+        await event.message.answer(text, parse_mode="html", attachments=[pagination])
 
-        text += "Чтобы оставить новое обращение, нажми кнопку «📝 Обратная связь» в главном меню"
-
-        await event.message.answer(text, parse_mode="html", attachments=[get_feedback_menu()])
-
-    # ==================== ПАГИНАЦИЯ С ПРЕВЬЮ ====================
+    # ==================== ПАГИНАЦИЯ ====================
     async def _show_search_page(self, event, user_id, page, query):
         context = self._get_user_context(user_id)
         movies_list = context.get('movies', [])
@@ -595,20 +619,13 @@ class MaxAdapter:
         for movie_data in movies_list[start_idx:end_idx]:
             movie_details = get_movie_details(movie_data['id'])
             if movie_details:
-                # 1. Отправляем ссылку для красивого превью
-                link = get_movie_link(movie_details)
-                if link:
-                    await event.message.answer(link)
-                
-                # 2. Отправляем текст с кнопкой "Мнение"
-                movie_name = movie_details.get('name', 'Без названия')
-                movie_id = movie_details.get('id')
-                card_text = f"🎬 <b>{movie_name}</b>"
-                await event.message.answer(
-                    card_text,
-                    parse_mode='html',
-                    attachments=[get_opinion_button(movie_id)]
-                )
+                card_text, _ = format_movie_card(movie_details)
+                if card_text:
+                    await event.message.answer(
+                        card_text,
+                        parse_mode='html',
+                        attachments=[get_opinion_button(movie_details['id'])]
+                    )
 
         if total_pages > 1:
             pagination = get_pagination_buttons(page, total_pages, "search", current_query)
@@ -647,18 +664,13 @@ class MaxAdapter:
         for movie_data in movies_list[start_idx:end_idx]:
             movie_details = get_movie_details(movie_data['id'])
             if movie_details:
-                link = get_movie_link(movie_details)
-                if link:
-                    await event.message.answer(link)
-                
-                movie_name = movie_details.get('name', 'Без названия')
-                movie_id = movie_details.get('id')
-                card_text = f"🎬 <b>{movie_name}</b> 🆕"
-                await event.message.answer(
-                    card_text,
-                    parse_mode='html',
-                    attachments=[get_opinion_button(movie_id)]
-                )
+                card_text, _ = format_movie_card(movie_details, is_premiers=True)
+                if card_text:
+                    await event.message.answer(
+                        card_text,
+                        parse_mode='html',
+                        attachments=[get_opinion_button(movie_details['id'])]
+                    )
 
         if total_pages > 1:
             pagination = get_pagination_buttons(page, total_pages, "premiers", "")
@@ -697,18 +709,13 @@ class MaxAdapter:
         for movie_data in movies_list[start_idx:end_idx]:
             movie_details = get_movie_details(movie_data['id'])
             if movie_details:
-                link = get_movie_link(movie_details)
-                if link:
-                    await event.message.answer(link)
-                
-                movie_name = movie_details.get('name', 'Без названия')
-                movie_id = movie_details.get('id')
-                card_text = f"🎬 <b>{movie_name}</b>"
-                await event.message.answer(
-                    card_text,
-                    parse_mode='html',
-                    attachments=[get_opinion_button(movie_id)]
-                )
+                card_text, _ = format_movie_card(movie_details, is_person_search=True, query=query)
+                if card_text:
+                    await event.message.answer(
+                        card_text,
+                        parse_mode='html',
+                        attachments=[get_opinion_button(movie_details['id'])]
+                    )
 
         if total_pages > 1:
             pagination = get_pagination_buttons(page, total_pages, "search", query)
@@ -735,21 +742,15 @@ class MaxAdapter:
             await send_func("😢 Не могу найти информацию о фильме.")
             return
 
-        # 1. Отправляем ссылку для красивого превью
-        link = get_movie_link(movie_details)
-        if link:
-            await send_func(link)
-        
-        # 2. Отправляем текст с кнопками
-        movie_name = movie_details.get('name', 'Без названия')
-        movie_id = movie_details.get('id')
-        card_text = f"🎬 <b>{movie_name}</b>"
-        
-        extra_buttons = [[
-            {"type": "callback", "text": "🐾 Мнение о фильме", "payload": f"opinion_{movie_id}"}
-        ]]
-        keyboard = get_action_keyboard("случайный фильм", "random", extra_buttons)
-        await send_func(card_text, parse_mode='html', attachments=[keyboard])
+        card_text, _ = format_movie_card(movie_details)
+        if card_text:
+            extra_buttons = [[
+                {"type": "callback", "text": "🐾 Мнение о фильме", "payload": f"opinion_{movie_details['id']}"}
+            ]]
+            keyboard = get_action_keyboard("случайный фильм", "random", extra_buttons)
+            await send_func(card_text, parse_mode='html', attachments=[keyboard])
+        else:
+            await send_func("😢 Не могу показать карточку.")
 
     async def _handle_premiers(self, event: MessageCreated):
         user_id = event.message.sender.user_id
@@ -913,7 +914,7 @@ class MaxAdapter:
         
         await self._show_person_search_page(event, user_id, 0, query)
 
-    # ==================== МНЕНИЕ О ФИЛЬМЕ ====================
+    # ==================== МНЕНИЕ О ФИЛЬМЕ (С ССЫЛКОЙ ДЛЯ ПРЕВЬЮ) ====================
     async def _handle_opinion_command(self, event: MessageCreated):
         user_id = event.message.sender.user_id
         text = event.message.body.text.replace('/opinion', '').strip()
@@ -957,14 +958,13 @@ class MaxAdapter:
         movie_name = movie_details.get('name', 'Без названия')
         movie_year = movie_details.get('year', '')
 
-        # Отправляем ссылку для красивого превью
-        link = get_movie_link(movie_details)
-        if link:
-            await send_func(link)
+        # 👇 1. Отправляем ссылку для красивого превью (перед мнением)
+        kp_url = f"https://www.kinopoisk.ru/film/{movie_id}/"
+        await send_func(kp_url)
 
         cached = get_cached_opinion(movie_id)
         if cached:
-            formatted_opinion = self._format_opinion(cached, movie_name, movie_year, movie_id)
+            formatted_opinion = self._format_opinion(cached, movie_name, movie_year)
             await send_func(formatted_opinion, parse_mode="html")
             increment_stat_counter(user_id, 'opinion_count')
             record_user_opinion(user_id, movie_id)
@@ -983,7 +983,7 @@ class MaxAdapter:
                 save_opinion_cache(movie_id, opinion)
                 increment_stat_counter(user_id, 'opinion_count')
                 record_user_opinion(user_id, movie_id)
-                formatted_opinion = self._format_opinion(opinion, movie_name, movie_year, movie_id)
+                formatted_opinion = self._format_opinion(opinion, movie_name, movie_year)
                 await send_func(formatted_opinion, parse_mode="html")
                 await send_func("🏠", attachments=[get_action_keyboard(None, None, None)])
             else:
@@ -992,10 +992,9 @@ class MaxAdapter:
             logger.error(f"Ошибка генерации: {e}")
             await send_func("🐾 Гав! Что-то пошло не так. Попробуй позже!")
 
-    def _format_opinion(self, opinion, movie_name, movie_year, movie_id):
-        kp_url = f"https://www.kinopoisk.ru/film/{movie_id}/"
-        title_with_link = f"<a href='{kp_url}'><b>{movie_name}</b></a> ({movie_year})"
-        return f"Я посмотрела {title_with_link}, и вот что думаю:\n\n{opinion}\n\n🐾"
+    def _format_opinion(self, opinion, movie_name, movie_year):
+        """Форматирует мнение — без ссылки в тексте, так как ссылка уже отправлена отдельно"""
+        return f"Я посмотрела <b>{movie_name}</b> ({movie_year}), и вот что думаю:\n\n{opinion}\n\n🐾"
 
     async def _generate_opinion(self, movie_details):
         title = movie_details.get('name', 'Без названия')
@@ -1091,7 +1090,7 @@ class MaxAdapter:
 
     # ==================== ЗАПУСК ====================
     async def run(self):
-        logger.info("🚀 MaxAdapter запущен с красивыми превью")
+        logger.info("🚀 MaxAdapter запущен (финальная версия)")
         await self.bot.delete_webhook()
         await self.dp.start_polling(self.bot)
 
