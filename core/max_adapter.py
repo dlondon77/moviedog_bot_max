@@ -25,8 +25,15 @@ import httpx
 
 # ==================== ИМПОРТЫ ИЗ CORE ====================
 import user as user_module
-import movie as movie_module
 import db as db_module
+
+try:
+    search_persons = movie_module.search_persons
+except AttributeError:
+    # Если функции нет — создаём заглушку
+    def search_persons(query, limit=20, partial_match=True):
+        logger.warning(f"search_persons вызвана, но функция не реализована в movie.py")
+        return []
 
 register_user = user_module.register_user
 get_user_limits = user_module.get_user_limits
