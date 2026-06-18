@@ -494,3 +494,84 @@ def format_filter_keyboard(query, current_filters=None, total_count=0, has_more=
     Заглушка для Max — клавиатуры с фильтрами пока не поддерживаются
     """
     return None
+
+def search_persons(query: str, limit=20, partial_match=True):
+    """Ищет актёров и режиссёров по имени
+    
+    Args:
+        query: поисковый запрос
+        limit: максимальное количество результатов
+        partial_match: если True, ищет по вхождению подстроки (содержит)
+                      если False, ищет только по началу имени
+    """
+    conn = db.get_movies_db_connection()
+    cursor = conn.cursor()
+    
+    query_clean = query.strip().lower()
+    
+    if len(query_clean) < 2:
+        conn.close()
+        return []
+    
+    logger.info(f"🔍 Поиск персон: запрос='{query}'")
+    
+    # Ищем актёров
+    search_pattern = f"%{query_clean}%"
+    
+    sql = '''
+        SELECT id, name, enName, 'actor' as type, photo
+        FROM actors 
+        WHERE LOWER(name) LIKE ? OR LOWER(enName) LIKE ?
+        ORDER BY 
+            CASE 
+                WHEN LOWER(name) = ? THEN 1
+                WHEN LOWER(name) LIKE ? THEN 2
+                WHEN LOWER(enName) LIKE ? THEN 3
+                ELSE 4
+            END
+        LIMIT ?
+    '''
+    
+    cursor.execute(sql, [search_pattern, search_pattern, query_clean, f"{query_clean}%", f"{query_clean}%", limit])
+    actors = cursor.fetchall()
+    
+    # Ищем режиссёров
+    cursor.execute(sql, [search_pattern, search_pattern, query_clean, f"{query_clean}%", f"{query_clean}%", limit])
+    directors = cursor.fetchall()
+    
+    conn.close()
+    
+    # Объединяем результаты
+    persons = []
+    seen_ids = set()
+    
+    for person in actors + directors:
+        person_id = person[0]
+        if person_id in seen_ids:
+            continue
+        seen_ids.add(person_id)
+        
+        rus_name = person[1] or ''
+        eng_name = person[2] or ''
+        person_type = person[3]
+        photo = person[4] if len(person) > 4 else None
+        
+        if rus_name and eng_name:
+            display_name = f"{rus_name} ({eng_name})"
+        elif rus_name:
+            display_name = rus_name
+        else:
+            display_name = eng_name
+        
+        persons.append({
+            'id': person_id,
+            'name': display_name,
+            'raw_name': rus_name or eng_name,
+            'type': person_type,
+            'photo': photo
+        })
+    
+    persons.sort(key=lambda x: 0 if x['type'] == 'actor' else 1)
+    
+    logger.info(f"🔍 Найдено персон: {len(persons)}")
+    return persons[:limit]    
