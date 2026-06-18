@@ -1,7 +1,8 @@
-# core/max_adapter.py — ИСПРАВЛЕННАЯ ВЕРСИЯ
-# - Полный промт из TG
-# - Обычный поиск по актёрам (без выбора персоны)
-# - Убраны все картинки и постеры
+# core/max_adapter.py — ПОЛНАЯ ВЕРСИЯ
+# + Кнопки "Ещё" после действий (кроме премьер и мнения)
+# + Исправлен показ персоны в карточке
+# + Обратная связь /feedback
+# + FAQ /faq
 
 import logging
 import configparser
@@ -72,6 +73,16 @@ def save_opinion_cache(movie_id: int, full_opinion: str):
     finally:
         conn.close()
 
+# ==================== СОХРАНЕНИЕ ОБРАТНОЙ СВЯЗИ ====================
+def save_feedback(user_id, feedback_type, movie_id, message):
+    conn = db_module.get_opinions_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+    INSERT INTO feedback (user_id, type, movie_id, message, status, created_at)
+    VALUES (?, ?, ?, ?, 'new', ?)
+    ''', (user_id, feedback_type, movie_id if movie_id else None, message, datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
 
 # ==================== КОНФИГ И DEEPSEEK ====================
 def load_config():
@@ -124,6 +135,10 @@ def get_main_menu():
         [
             {"type": "callback", "text": "👤 Мой профиль", "payload": "profile"},
             {"type": "callback", "text": "🐾 Мнение о фильме", "payload": "opinion_prompt"}
+        ],
+        [
+            {"type": "callback", "text": "❓ FAQ", "payload": "faq"},
+            {"type": "callback", "text": "📝 Обратная связь", "payload": "feedback"}
         ]
     ]
     return InlineKeyboardMarkup(buttons)
@@ -145,6 +160,56 @@ def get_pagination_buttons(current_page: int, total_pages: int, prefix: str, que
     buttons.append(row)
     return InlineKeyboardMarkup(buttons)
 
+def get_action_keyboard(action_name: str, action_payload: str = None, extra_buttons: list = None):
+    """Создаёт клавиатуру с кнопкой повтора действия и возвратом в меню"""
+    buttons = []
+    
+    if action_payload:
+        buttons.append([
+            {"type": "callback", "text": f"🔄 Ещё {action_name}", "payload": action_payload}
+        ])
+    
+    if extra_buttons:
+        for row in extra_buttons:
+            buttons.append(row)
+    
+    buttons.append([
+        {"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}
+    ])
+    
+    return InlineKeyboardMarkup(buttons)
+
+def get_feedback_menu():
+    buttons = [
+        [
+            {"type": "callback", "text": "🐛 Сообщить об ошибке", "payload": "feedback_error"},
+            {"type": "callback", "text": "📢 Оставить отзыв", "payload": "feedback_review"}
+        ],
+        [
+            {"type": "callback", "text": "📋 Мои обращения", "payload": "feedback_list"}
+        ],
+        [
+            {"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}
+        ]
+    ]
+    return InlineKeyboardMarkup(buttons)
+
+def get_faq_menu():
+    buttons = [
+        [
+            {"type": "callback", "text": "🔍 Как найти фильм?", "payload": "faq_search"},
+            {"type": "callback", "text": "💬 Как узнать мнение?", "payload": "faq_opinion"}
+        ],
+        [
+            {"type": "callback", "text": "⚠️ Какие есть лимиты?", "payload": "faq_limits"},
+            {"type": "callback", "text": "📢 Предложить улучшение", "payload": "faq_suggest"}
+        ],
+        [
+            {"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}
+        ]
+    ]
+    return InlineKeyboardMarkup(buttons)
+
 
 # ==================== ОСНОВНОЙ КЛАСС АДАПТЕРА ====================
 class MaxAdapter:
@@ -159,7 +224,7 @@ class MaxAdapter:
         self.user_context = {}
 
         self._register_handlers()
-        logger.info("✅ MaxAdapter инициализирован (без картинок, с полным промтом)")
+        logger.info("✅ MaxAdapter инициализирован (с FAQ, Feedback, кнопками Ещё)")
 
     def _register_handlers(self):
         @self.dp.bot_started()
@@ -201,6 +266,23 @@ class MaxAdapter:
         async def on_opinion(event: MessageCreated):
             await self._handle_opinion_command(event)
 
+        @self.dp.message_created(F.message.body.text == "/faq")
+        async def on_faq(event: MessageCreated):
+            await event.message.answer(
+                "❓ <b>Часто задаваемые вопросы</b>\n\nВыбери вопрос из меню ниже:",
+                parse_mode="html",
+                attachments=[get_faq_menu()]
+            )
+
+        @self.dp.message_created(F.message.body.text == "/feedback")
+        async def on_feedback(event: MessageCreated):
+            await event.message.answer(
+                "📝 <b>Обратная связь</b>\n\n"
+                "Выбери тип обращения:",
+                parse_mode="html",
+                attachments=[get_feedback_menu()]
+            )
+
         @self.dp.message_created(F.message.body.text == "/help")
         async def on_help(event: MessageCreated):
             await event.message.answer(
@@ -212,6 +294,8 @@ class MaxAdapter:
                 "/person — поиск по актёрам/режиссёрам\n"
                 "/opinion [название или ID] — мнение о фильме\n"
                 "/profile — мой профиль\n"
+                "/faq — частые вопросы\n"
+                "/feedback — обратная связь\n"
                 "/help — это сообщение",
                 parse_mode="html"
             )
@@ -230,7 +314,7 @@ class MaxAdapter:
             self.user_context[user_id] = {}
         return self.user_context[user_id]
 
-    # ==================== СТАРТ (без картинки) ====================
+    # ==================== СТАРТ ====================
     async def _handle_start(self, event: MessageCreated):
         user_id = event.message.sender.user_id
         username = getattr(event.message.sender, 'username', '') or ''
@@ -261,7 +345,9 @@ class MaxAdapter:
             "🔍 <b>Поиск</b> — найду отборные фильмы по названию\n"
             "🎉 <b>Премьеры</b> — учуяю свежие ожидаемые премьеры\n"
             "🎭 <b>Поиск по актёрам</b> — найду фильмы по имени актёра или режиссёра\n"
-            "🐾 <b>Мнение о фильме</b> — расскажу о смысле фильма, его настроении и атмосфере, укажу на плюсы и минусы и поставлю оценку\n\n"
+            "🐾 <b>Мнение о фильме</b> — расскажу о смысле фильма, его настроении и атмосфере, укажу на плюсы и минусы и поставлю оценку\n"
+            "❓ <b>FAQ</b> — ответы на частые вопросы\n"
+            "📝 <b>Обратная связь</b> — сообщить об ошибке или оставить отзыв\n\n"
             "👇 <b>Выбери действие в меню ниже:</b>"
         ).format(
             tariff=limits.get('tariff_name', 'Щенячий азарт'),
@@ -288,7 +374,29 @@ class MaxAdapter:
             except AttributeError:
                 pass
 
-        # Пагинация поиска
+        # ===== FAQ =====
+        if payload.startswith("faq_"):
+            await self._handle_faq_callback(event, user_id, payload)
+            return
+
+        # ===== FEEDBACK =====
+        if payload.startswith("feedback_"):
+            await self._handle_feedback_callback(event, user_id, payload)
+            return
+
+        # ===== НАВИГАЦИЯ =====
+        if payload == "back_to_menu":
+            self.user_context.pop(user_id, None)
+            await event.message.answer(
+                "🐾 Возвращаюсь в главное меню",
+                attachments=[get_main_menu()]
+            )
+            return
+
+        if payload == "noop":
+            return
+
+        # ===== ПАГИНАЦИЯ =====
         if payload.startswith("search_page_"):
             parts = payload.split("_")
             page = int(parts[2])
@@ -302,10 +410,7 @@ class MaxAdapter:
             await self._show_premiers_page(event, user_id, page)
             return
 
-        if payload == "noop":
-            return
-
-        # Основные команды
+        # ===== ОСНОВНЫЕ КОМАНДЫ =====
         if payload == "random":
             await event.message.answer("🎲 Ищу случайный фильм...")
             await self._send_random_result(event.message.answer)
@@ -328,6 +433,122 @@ class MaxAdapter:
             await self._send_opinion_by_id(event, user_id, movie_id)
         else:
             await event.message.answer(f"🐾 Неизвестная команда: {payload}")
+
+    # ==================== FAQ ====================
+    async def _handle_faq_callback(self, event, user_id, payload):
+        if payload == "faq_search":
+            text = (
+                "🔍 <b>Как найти фильм?</b>\n\n"
+                "1. Нажми кнопку «🔍 Поиск» в главном меню\n"
+                "2. Введи название фильма\n"
+                "3. Я покажу результаты\n\n"
+                "Также можно искать по актёрам кнопкой «🎭 Поиск по актёрам»"
+            )
+        elif payload == "faq_opinion":
+            text = (
+                "💬 <b>Как узнать мнение о фильме?</b>\n\n"
+                "После того как я покажу карточку фильма, нажми кнопку «🐾 Мнение о фильме».\n"
+                "Я посмотрю фильм в ускоренном режиме и поделюсь впечатлениями!\n\n"
+                "Лимит: 3 мнения в день для бесплатного тарифа."
+            )
+        elif payload == "faq_limits":
+            text = (
+                "⚠️ <b>Лимиты бота</b>\n\n"
+                "У меня есть суточные лимиты на запросы мнений:\n"
+                "• 🆓 Бесплатный тариф: 3 мнения в день\n"
+                "• 🐕 Охотничий: 10 мнений в день (199 ₽/мес)\n"
+                "• 🕵️ Ищейка: 30 мнений в день (399 ₽/мес)\n"
+                "• 🐺 Вожак: безлимит (999 ₽/мес)\n\n"
+                "Лимиты сбрасываются в полночь!"
+            )
+        elif payload == "faq_suggest":
+            text = (
+                "📢 <b>Предложить улучшение</b>\n\n"
+                "Если у тебя есть идеи, как сделать меня лучше, воспользуйся кнопкой «📝 Обратная связь»\n"
+                "Я люблю апдейты и новые тренировки, как косточки! 🦴"
+            )
+        else:
+            text = "🐾 Выбери вопрос из меню"
+
+        await event.message.answer(
+            text,
+            parse_mode="html",
+            attachments=[get_faq_menu()]
+        )
+
+    # ==================== FEEDBACK ====================
+    async def _handle_feedback_callback(self, event, user_id, payload):
+        if payload == "feedback_error":
+            self._get_user_context(user_id)['feedback_type'] = 1
+            self._get_user_context(user_id)['feedback_stage'] = 'awaiting_movie_id'
+            text = (
+                "🐾 <b>Помоги мне исправить ошибку!</b>\n\n"
+                "Для быстрого решения укажи ID фильма одним из способов:\n\n"
+                "🔹 <b>Способ 1</b> — В карточке фильма в боте:\n"
+                "   Найди ссылку https://www.kinopoisk.ru/film/23200/\n"
+                "   Цифры в конце — это ID (в примере: 23200)\n\n"
+                "🔹 <b>Способ 2</b> — На сайте Кинопоиска:\n"
+                "   Открой карточку фильма, ID в адресной строке\n\n"
+                "📌 ID всегда число от 1 до 10 цифр\n\n"
+                "Если ошибка не связана с фильмом, напиши «нет»"
+            )
+            await event.message.answer(text, parse_mode="html")
+        elif payload == "feedback_review":
+            self._get_user_context(user_id)['feedback_type'] = 2
+            self._get_user_context(user_id)['feedback_stage'] = 'awaiting_review'
+            await event.message.answer("🐾 Напиши свой отзыв о моих навыках:")
+        elif payload == "feedback_list":
+            await self._show_user_feedback(event, user_id)
+        else:
+            await event.message.answer("🐾 Возвращаюсь в меню обратной связи", attachments=[get_feedback_menu()])
+
+    async def _show_user_feedback(self, event, user_id):
+        conn = db_module.get_opinions_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT id, type, movie_id, message, status, created_at, admin_comment
+            FROM feedback 
+            WHERE user_id = ? AND status != 'archive'
+            ORDER BY created_at DESC
+            LIMIT 10
+        ''', (user_id,))
+        feedback_list = cursor.fetchall()
+        conn.close()
+
+        if not feedback_list:
+            await event.message.answer(
+                "🐾 У тебя пока нет обращений.\n\n"
+                "Ты можешь оставить отзыв или сообщить об ошибке через кнопку «📝 Обратная связь»",
+                attachments=[get_feedback_menu()]
+            )
+            return
+
+        status_icons = {'new': '🆕', 'in_progress': '🔄', 'resolved': '✅'}
+        type_names = {1: '🐛 Ошибка', 2: '📢 Отзыв'}
+
+        text = "📝 <b>Твои обращения</b>\n\n"
+        for fb in feedback_list[:5]:
+            fb_id, fb_type, movie_id, message, status, created_at, comment = fb
+            status_icon = status_icons.get(status, '📌')
+            type_name = type_names.get(fb_type, '📝')
+            created_date = created_at[:10] if created_at else "неизвестно"
+            message_preview = message[:100] + ('...' if len(message) > 100 else '')
+            
+            text += f"{status_icon} #{fb_id} {type_name}\n"
+            text += f"📅 {created_date}\n"
+            if movie_id:
+                text += f"🎬 Фильм: {movie_id}\n"
+            text += f"💬 {message_preview}\n"
+            if comment:
+                text += f"📝 Ответ: {comment[:100]}\n"
+            text += "\n"
+
+        if len(feedback_list) > 5:
+            text += f"... и ещё {len(feedback_list) - 5} обращений\n\n"
+
+        text += "Чтобы оставить новое обращение, нажми кнопку «📝 Обратная связь» в главном меню"
+
+        await event.message.answer(text, parse_mode="html", attachments=[get_feedback_menu()])
 
     # ==================== ПАГИНАЦИЯ ====================
     async def _show_search_page(self, event, user_id, page, query):
@@ -430,11 +651,11 @@ class MaxAdapter:
 
         card_text, _ = format_movie_card(movie_details)
         if card_text:
-            await send_func(
-                card_text,
-                parse_mode='html',
-                attachments=[get_opinion_button(movie_details['id'])]
-            )
+            extra_buttons = [[
+                {"type": "callback", "text": "🐾 Мнение о фильме", "payload": f"opinion_{movie_details['id']}"}
+            ]]
+            keyboard = get_action_keyboard("случайный фильм", "random", extra_buttons)
+            await send_func(card_text, parse_mode='html', attachments=[keyboard])
         else:
             await send_func("😢 Не могу показать карточку.")
 
@@ -468,7 +689,7 @@ class MaxAdapter:
             parse_mode="html"
         )
 
-    # ==================== ПОИСК ПО АКТЁРАМ (ОБЫЧНЫЙ) ====================
+    # ==================== ПОИСК ПО АКТЁРАМ (с исправлением ссылки) ====================
     async def _handle_message(self, event: MessageCreated):
         user_id = event.message.sender.user_id
         text = event.message.body.text if event.message.body else ""
@@ -478,6 +699,17 @@ class MaxAdapter:
         context = self._get_user_context(user_id)
         state = context.get('state')
 
+        # Обработка обратной связи
+        if state == 'awaiting_movie_id':
+            await self._process_feedback_movie_id(event, user_id, text)
+            return
+        if state == 'awaiting_review':
+            await self._process_feedback_review(event, user_id, text)
+            return
+        if state == 'awaiting_feedback_message':
+            await self._process_feedback_message(event, user_id, text)
+            return
+
         if state == 'awaiting_search':
             await self._perform_search(event, user_id, text)
         elif state == 'awaiting_person':
@@ -486,8 +718,41 @@ class MaxAdapter:
             await self._process_opinion(event, user_id, text, event.message.answer)
             self.user_context.pop(user_id, None)
         else:
-            # По умолчанию — поиск
             await self._perform_search(event, user_id, text)
+
+    async def _process_feedback_movie_id(self, event, user_id, text):
+        context = self._get_user_context(user_id)
+        if text.lower() == 'нет':
+            context['movie_id'] = None
+            context['feedback_stage'] = 'awaiting_feedback_message'
+            await event.message.answer("🐾 Теперь опиши подробнее что волнует:")
+        elif text.isdigit() and 2 < len(text) <= 10 and int(text) != 0:
+            context['movie_id'] = int(text)
+            context['feedback_stage'] = 'awaiting_feedback_message'
+            await event.message.answer("🐾 Теперь опиши что не так с этим фильмом:")
+        else:
+            await event.message.answer("🐾 ID фильма должен быть числом от 3 до 10 цифр. Попробуй еще раз или введи 'нет':")
+
+    async def _process_feedback_review(self, event, user_id, text):
+        context = self._get_user_context(user_id)
+        feedback_type = context.get('feedback_type', 2)
+        save_feedback(user_id, feedback_type, None, text)
+        context.pop('feedback_stage', None)
+        await event.message.answer(
+            "🐾 Спасибо за отзыв! Очень ценно твое мнение.\n\nЯ передала его своим тренерам!",
+            attachments=[get_feedback_menu()]
+        )
+
+    async def _process_feedback_message(self, event, user_id, text):
+        context = self._get_user_context(user_id)
+        movie_id = context.get('movie_id')
+        feedback_type = context.get('feedback_type', 1)
+        save_feedback(user_id, feedback_type, movie_id, text)
+        context.pop('feedback_stage', None)
+        await event.message.answer(
+            "🐾 Гав-гав! Спасибо за бдительность!\n\nЯ записала твоё сообщение и уже бегу разбираться.",
+            attachments=[get_feedback_menu()]
+        )
 
     async def _perform_search(self, event: MessageCreated, user_id, query):
         if len(query) < 2:
@@ -509,7 +774,7 @@ class MaxAdapter:
         await self._show_search_page(event, user_id, 0, query)
 
     async def _perform_person_search(self, event: MessageCreated, user_id, query):
-        """Поиск по актёрам/режиссёрам (без выбора персоны)"""
+        """Поиск по актёрам/режиссёрам с передачей query для ссылок"""
         if len(query) < 2:
             await event.message.answer("🐾 Введи хотя бы 2 символа.")
             self.user_context.pop(user_id, None)
@@ -523,12 +788,57 @@ class MaxAdapter:
             self.user_context.pop(user_id, None)
             return
 
+        # Сохраняем запрос в контекст для format_movie_card
         context = self._get_user_context(user_id)
         context['movies'] = movies_list
         context['query'] = query
-        await self._show_search_page(event, user_id, 0, query)
+        context['is_person_search'] = True
+        
+        # Показываем результат с передачей query для ссылок
+        await self._show_person_search_page(event, user_id, 0, query)
 
-    # ==================== МНЕНИЕ О ФИЛЬМЕ (ПОЛНЫЙ ПРОМТ ИЗ TG) ====================
+    async def _show_person_search_page(self, event, user_id, page, query):
+        context = self._get_user_context(user_id)
+        movies_list = context.get('movies', [])
+
+        if not movies_list:
+            await event.message.answer("😢 Результаты поиска устарели. Начни заново.")
+            return
+
+        items_per_page = 3
+        total_pages = (len(movies_list) + items_per_page - 1) // items_per_page
+
+        if page >= total_pages:
+            page = total_pages - 1
+        if page < 0:
+            page = 0
+
+        start_idx = page * items_per_page
+        end_idx = min(start_idx + items_per_page, len(movies_list))
+
+        await event.message.answer(
+            f"🎭 <b>Фильмы с участием: {query}</b>\n"
+            f"Страница {page+1} из {total_pages}",
+            parse_mode="html"
+        )
+
+        for movie_data in movies_list[start_idx:end_idx]:
+            movie_details = get_movie_details(movie_data['id'])
+            if movie_details:
+                # Передаём is_person_search=True и query для ссылок
+                card_text, _ = format_movie_card(movie_details, is_person_search=True, query=query)
+                if card_text:
+                    await event.message.answer(
+                        card_text,
+                        parse_mode='html',
+                        attachments=[get_opinion_button(movie_details['id'])]
+                    )
+
+        if total_pages > 1:
+            pagination = get_pagination_buttons(page, total_pages, "search", query)
+            await event.message.answer("👇 Навигация:", attachments=[pagination])
+
+    # ==================== МНЕНИЕ О ФИЛЬМЕ ====================
     async def _handle_opinion_command(self, event: MessageCreated):
         user_id = event.message.sender.user_id
         text = event.message.body.text.replace('/opinion', '').strip()
@@ -593,7 +903,9 @@ class MaxAdapter:
                 increment_stat_counter(user_id, 'opinion_count')
                 record_user_opinion(user_id, movie_id)
                 formatted_opinion = self._format_opinion(opinion, movie_name, movie_year, movie_id)
-                await send_func(formatted_opinion, parse_mode="html")
+                # После мнения только кнопка "В главное меню"
+                menu_keyboard = get_action_keyboard(None, None, None)
+                await send_func(formatted_opinion, parse_mode="html", attachments=[menu_keyboard])
             else:
                 await send_func("😢 Не удалось сгенерировать мнение.")
         except Exception as e:
@@ -606,7 +918,6 @@ class MaxAdapter:
         return f"Я посмотрела {title_with_link}, и вот что думаю:\n\n{opinion}\n\n🐾"
 
     async def _generate_opinion(self, movie_details):
-        """Полный промт как в TG-версии"""
         title = movie_details.get('name', 'Без названия')
         year = movie_details.get('year', '')
         
@@ -643,7 +954,6 @@ class MaxAdapter:
         if description and len(description) > 800:
             description = description[:800] + '...'
 
-        # ===== ПОЛНЫЙ ПРОМТ КАК В TG =====
         prompt = f"""Ты — КиноИщейка, собака-девочка, кинокритик с отличным чутьем на хорошее кино. Ты смотришь фильмы и делишься своим мнением с юмором и энтузиазмом. Говори о себе в женском роде.
 
 Информация о фильме:
@@ -666,7 +976,6 @@ class MaxAdapter:
 5. Добавь собачий юмор
 6. Говори о себе в женском роде
 7. НЕ используй вводные фразы типа "Я посмотрела фильм и вот что думаю" - сразу начинай с содержательной части
-8. Не благодари за замечания и не упоминай, что это исправленная версия - просто напиши новое мнение
 
 Расскажи о:
 - Настроении и смысле фильма
@@ -698,25 +1007,11 @@ class MaxAdapter:
         )
 
         full_response = response.choices[0].message.content.strip()
-        
-        # Парсим ответ
-        short_opinion = ""
-        mood_tags = ""
-        atmosphere_tags = ""
-                     
-        for part in full_response.split('\n'):
-            if part.startswith("Оценка:"):
-                short_opinion = part
-            elif part.startswith("Настроение:"):
-                mood_tags = part.replace("Настроение:", "").strip()
-            elif part.startswith("Атмосфера:"):
-                atmosphere_tags = part.replace("Атмосфера:", "").strip()
-        
         return full_response
 
     # ==================== ЗАПУСК ====================
     async def run(self):
-        logger.info("🚀 MaxAdapter запущен (без картинок, с полным промтом)")
+        logger.info("🚀 MaxAdapter запущен (с FAQ, Feedback, кнопками Ещё)")
         await self.bot.delete_webhook()
         await self.dp.start_polling(self.bot)
 
