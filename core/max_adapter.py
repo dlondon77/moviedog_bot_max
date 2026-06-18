@@ -1,8 +1,7 @@
-# core/max_adapter.py — ПОЛНАЯ ВЕРСИЯ
-# + Кнопки "Ещё" после действий (кроме премьер и мнения)
-# + Исправлен показ персоны в карточке
-# + Обратная связь /feedback
-# + FAQ /faq
+# core/max_adapter.py — ИСПРАВЛЕННАЯ ВЕРСИЯ
+# + Кнопка "В главное меню" на всех страницах
+# + Исправлены FAQ и Feedback
+# + Убрана кнопка "Мнение" из главного меню
 
 import logging
 import configparser
@@ -134,10 +133,9 @@ def get_main_menu():
         ],
         [
             {"type": "callback", "text": "👤 Мой профиль", "payload": "profile"},
-            {"type": "callback", "text": "🐾 Мнение о фильме", "payload": "opinion_prompt"}
+            {"type": "callback", "text": "❓ FAQ", "payload": "faq"}
         ],
         [
-            {"type": "callback", "text": "❓ FAQ", "payload": "faq"},
             {"type": "callback", "text": "📝 Обратная связь", "payload": "feedback"}
         ]
     ]
@@ -158,13 +156,17 @@ def get_pagination_buttons(current_page: int, total_pages: int, prefix: str, que
     if current_page < total_pages - 1:
         row.append({"type": "callback", "text": "Вперёд ▶️", "payload": f"{prefix}_page_{current_page+1}_{query}"})
     buttons.append(row)
+    # Добавляем кнопку "В главное меню" под пагинацией
+    buttons.append([
+        {"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}
+    ])
     return InlineKeyboardMarkup(buttons)
 
-def get_action_keyboard(action_name: str, action_payload: str = None, extra_buttons: list = None):
+def get_action_keyboard(action_name: str = None, action_payload: str = None, extra_buttons: list = None):
     """Создаёт клавиатуру с кнопкой повтора действия и возвратом в меню"""
     buttons = []
     
-    if action_payload:
+    if action_name and action_payload:
         buttons.append([
             {"type": "callback", "text": f"🔄 Ещё {action_name}", "payload": action_payload}
         ])
@@ -375,12 +377,12 @@ class MaxAdapter:
                 pass
 
         # ===== FAQ =====
-        if payload.startswith("faq_"):
+        if payload == "faq" or payload.startswith("faq_"):
             await self._handle_faq_callback(event, user_id, payload)
             return
 
         # ===== FEEDBACK =====
-        if payload.startswith("feedback_"):
+        if payload == "feedback" or payload.startswith("feedback_"):
             await self._handle_feedback_callback(event, user_id, payload)
             return
 
@@ -425,9 +427,6 @@ class MaxAdapter:
             await event.message.answer("🎭 Введи имя актёра или режиссёра:")
         elif payload == "profile":
             await self._send_profile(event.message.answer, user_id)
-        elif payload == "opinion_prompt":
-            self._get_user_context(user_id)['state'] = 'awaiting_opinion'
-            await event.message.answer("🐾 Введи ID или название фильма:")
         elif payload.startswith("opinion_"):
             movie_id = int(payload.split("_")[1])
             await self._send_opinion_by_id(event, user_id, movie_id)
@@ -436,6 +435,11 @@ class MaxAdapter:
 
     # ==================== FAQ ====================
     async def _handle_faq_callback(self, event, user_id, payload):
+        if payload == "faq" or payload == "faq_back":
+            text = "❓ <b>Часто задаваемые вопросы</b>\n\nВыбери вопрос из меню ниже:"
+            await event.message.answer(text, parse_mode="html", attachments=[get_faq_menu()])
+            return
+
         if payload == "faq_search":
             text = (
                 "🔍 <b>Как найти фильм?</b>\n\n"
@@ -478,6 +482,14 @@ class MaxAdapter:
 
     # ==================== FEEDBACK ====================
     async def _handle_feedback_callback(self, event, user_id, payload):
+        if payload == "feedback" or payload == "feedback_back":
+            await event.message.answer(
+                "📝 <b>Обратная связь</b>\n\nВыбери тип обращения:",
+                parse_mode="html",
+                attachments=[get_feedback_menu()]
+            )
+            return
+
         if payload == "feedback_error":
             self._get_user_context(user_id)['feedback_type'] = 1
             self._get_user_context(user_id)['feedback_stage'] = 'awaiting_movie_id'
@@ -589,9 +601,16 @@ class MaxAdapter:
                         attachments=[get_opinion_button(movie_details['id'])]
                     )
 
+        # Пагинация с кнопкой "В главное меню"
         if total_pages > 1:
             pagination = get_pagination_buttons(page, total_pages, "search", current_query)
             await event.message.answer("👇 Навигация:", attachments=[pagination])
+        else:
+            # Если всего одна страница — сразу кнопка "В главное меню"
+            await event.message.answer(
+                "🏠 В главное меню",
+                attachments=[get_action_keyboard(None, None, None)]
+            )
 
     async def _show_premiers_page(self, event, user_id, page):
         context = self._get_user_context(user_id)
@@ -632,6 +651,11 @@ class MaxAdapter:
         if total_pages > 1:
             pagination = get_pagination_buttons(page, total_pages, "premiers", "")
             await event.message.answer("👇 Навигация:", attachments=[pagination])
+        else:
+            await event.message.answer(
+                "🏠 В главное меню",
+                attachments=[get_action_keyboard(None, None, None)]
+            )
 
     # ==================== ОБРАБОТЧИКИ КОМАНД ====================
     async def _handle_random(self, event: MessageCreated):
@@ -689,7 +713,7 @@ class MaxAdapter:
             parse_mode="html"
         )
 
-    # ==================== ПОИСК ПО АКТЁРАМ (с исправлением ссылки) ====================
+    # ==================== ПОИСК ПО АКТЁРАМ ====================
     async def _handle_message(self, event: MessageCreated):
         user_id = event.message.sender.user_id
         text = event.message.body.text if event.message.body else ""
@@ -788,13 +812,11 @@ class MaxAdapter:
             self.user_context.pop(user_id, None)
             return
 
-        # Сохраняем запрос в контекст для format_movie_card
         context = self._get_user_context(user_id)
         context['movies'] = movies_list
         context['query'] = query
         context['is_person_search'] = True
         
-        # Показываем результат с передачей query для ссылок
         await self._show_person_search_page(event, user_id, 0, query)
 
     async def _show_person_search_page(self, event, user_id, page, query):
@@ -825,7 +847,6 @@ class MaxAdapter:
         for movie_data in movies_list[start_idx:end_idx]:
             movie_details = get_movie_details(movie_data['id'])
             if movie_details:
-                # Передаём is_person_search=True и query для ссылок
                 card_text, _ = format_movie_card(movie_details, is_person_search=True, query=query)
                 if card_text:
                     await event.message.answer(
@@ -837,6 +858,11 @@ class MaxAdapter:
         if total_pages > 1:
             pagination = get_pagination_buttons(page, total_pages, "search", query)
             await event.message.answer("👇 Навигация:", attachments=[pagination])
+        else:
+            await event.message.answer(
+                "🏠 В главное меню",
+                attachments=[get_action_keyboard(None, None, None)]
+            )
 
     # ==================== МНЕНИЕ О ФИЛЬМЕ ====================
     async def _handle_opinion_command(self, event: MessageCreated):
@@ -888,6 +914,8 @@ class MaxAdapter:
             await send_func(formatted_opinion, parse_mode="html")
             increment_stat_counter(user_id, 'opinion_count')
             record_user_opinion(user_id, movie_id)
+            # После мнения — только "В главное меню"
+            await send_func("🏠", attachments=[get_action_keyboard(None, None, None)])
             return
 
         await send_func(f"🐾 Смотрю <b>{movie_name}</b> ({movie_year}) в ускоренном режиме... 🎬", parse_mode="html")
@@ -903,9 +931,9 @@ class MaxAdapter:
                 increment_stat_counter(user_id, 'opinion_count')
                 record_user_opinion(user_id, movie_id)
                 formatted_opinion = self._format_opinion(opinion, movie_name, movie_year, movie_id)
-                # После мнения только кнопка "В главное меню"
-                menu_keyboard = get_action_keyboard(None, None, None)
-                await send_func(formatted_opinion, parse_mode="html", attachments=[menu_keyboard])
+                await send_func(formatted_opinion, parse_mode="html")
+                # После мнения — только "В главное меню"
+                await send_func("🏠", attachments=[get_action_keyboard(None, None, None)])
             else:
                 await send_func("😢 Не удалось сгенерировать мнение.")
         except Exception as e:
