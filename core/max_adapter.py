@@ -1,9 +1,8 @@
-# core/max_adapter.py — ПОЛНАЯ ФИНАЛЬНАЯ ВЕРСИЯ
-# + Полная карточка фильма (описание, актёры, режиссёры)
-# + В мнении — ссылка на Кинопоиск (красивое превью)
-# + Пагинация по обращениям (как в TG)
-# + Тарифы как в TG (без цен)
-# + FAQ и Обратная связь
+# core/max_adapter.py — ФИНАЛ С ФИЛЬТРАМИ
+# + Фильтры по рейтингу и десятилетиям
+# + Старт без тарифа и лимитов
+# + Пагинация с номерами страниц и количеством показанных фильмов
+# + Исправлена пагинация обращений
 
 import logging
 import configparser
@@ -43,6 +42,7 @@ format_movie_card = movie_module.format_movie_card
 search_movies_in_db = movie_module.search_movies_in_db
 search_movies_by_person_in_db = movie_module.search_movies_by_person_in_db
 get_premier_movies_from_db = movie_module.get_premier_movies_from_db
+search_movies_with_filters = movie_module.search_movies_with_filters
 
 
 # ==================== КЭШ МНЕНИЙ ====================
@@ -208,19 +208,92 @@ def get_faq_menu():
     ]
     return InlineKeyboardMarkup(buttons)
 
-def get_feedback_pagination_buttons(page: int, total_pages: int, prefix: str = "feedback"):
-    """Кнопки пагинации для обращений (как в TG)"""
+def get_feedback_pagination_buttons(page: int, total_pages: int):
     buttons = []
     row = []
     if page > 0:
-        row.append({"type": "callback", "text": "⬅️ Назад", "payload": f"{prefix}_page_{page-1}"})
+        row.append({"type": "callback", "text": "⬅️ Назад", "payload": f"fb_page_{page-1}"})
     if page < total_pages - 1:
-        row.append({"type": "callback", "text": "Вперёд ➡️", "payload": f"{prefix}_page_{page+1}"})
+        row.append({"type": "callback", "text": "Вперёд ➡️", "payload": f"fb_page_{page+1}"})
     if row:
         buttons.append(row)
     buttons.append([
+        {"type": "callback", "text": "📝 В меню обратной связи", "payload": "feedback_back"}
+    ])
+    buttons.append([
         {"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}
     ])
+    return InlineKeyboardMarkup(buttons)
+
+
+# ==================== ФИЛЬТРЫ ====================
+def get_filter_keyboard(query, filters, total_count, has_more):
+    """Создаёт клавиатуру с фильтрами (как в VK)"""
+    buttons = []
+    
+    rating_row = []
+    current_rating = filters.get('rating_range')
+    rating_options = [
+        ('new', '🆕 Новинки'), ('5-6', '⭐5-6'), ('6-7', '⭐6-7'),
+        ('7-8', '⭐7-8'), ('8-9', '⭐8-9'), ('9-10', '⭐9-10')
+    ]
+    
+    for value, label in rating_options:
+        if current_rating == value:
+            label = f"✓ {label}"
+        rating_row.append({
+            "type": "callback",
+            "text": label[:40],
+            "payload": f"filter_rating_{value}_{query}"
+        })
+        if len(rating_row) == 3:
+            buttons.append(rating_row)
+            rating_row = []
+    if rating_row:
+        buttons.append(rating_row)
+    
+    decade_row = []
+    current_decade = filters.get('decade')
+    decade_options = [
+        ('pre1980', '📽 До1980'), ('1980s', '📅1980-е'), ('1990s', '📅1990-е'),
+        ('2000s', '📅2000-е'), ('2010s', '📅2010-е'), ('2020s', '📅2020-е')
+    ]
+    
+    for value, label in decade_options:
+        if current_decade == value:
+            label = f"✓ {label}"
+        decade_row.append({
+            "type": "callback",
+            "text": label[:40],
+            "payload": f"filter_decade_{value}_{query}"
+        })
+        if len(decade_row) == 3:
+            buttons.append(decade_row)
+            decade_row = []
+    if decade_row:
+        buttons.append(decade_row)
+    
+    if total_count > 0:
+        button_text = f"🎬 Показать карточки ({total_count})" if not has_more else f"🎬 Показать первые {total_count}"
+        buttons.append([{
+            "type": "callback",
+            "text": button_text[:40],
+            "payload": f"filter_show_{query}"
+        }])
+    
+    if filters:
+        buttons.append([{
+            "type": "callback",
+            "text": "🔄 Сбросить фильтры",
+            "payload": f"filter_reset_{query}"
+        }])
+    
+    buttons.append([{
+        "type": "callback",
+        "text": "🆕 Новый поиск",
+        "payload": "new_search"
+    }])
+    
     return InlineKeyboardMarkup(buttons)
 
 
@@ -237,7 +310,7 @@ class MaxAdapter:
         self.user_context = {}
 
         self._register_handlers()
-        logger.info("✅ MaxAdapter инициализирован (финальная версия)")
+        logger.info("✅ MaxAdapter инициализирован (с фильтрами)")
 
     def _register_handlers(self):
         @self.dp.bot_started()
@@ -326,7 +399,42 @@ class MaxAdapter:
             self.user_context[user_id] = {}
         return self.user_context[user_id]
 
-    # ==================== СТАРТ ====================
+    def _apply_filters_to_movies(self, movies, filters):
+        """Применяет фильтры к списку фильмов"""
+        if not filters:
+            return movies
+        
+        filtered = movies.copy()
+        
+        rating_filter = filters.get('rating_range')
+        if rating_filter:
+            if rating_filter == 'new':
+                filtered = [m for m in filtered if m.get('is_new_release', False)]
+            else:
+                try:
+                    min_rating, max_rating = map(float, rating_filter.split('-'))
+                    filtered = [m for m in filtered if m.get('rating', 0) >= min_rating and m.get('rating', 0) <= max_rating]
+                except:
+                    pass
+        
+        decade_filter = filters.get('decade')
+        if decade_filter:
+            if decade_filter == 'pre1980':
+                filtered = [m for m in filtered if m.get('year', 0) < 1980]
+            elif decade_filter == '1980s':
+                filtered = [m for m in filtered if 1980 <= m.get('year', 0) <= 1989]
+            elif decade_filter == '1990s':
+                filtered = [m for m in filtered if 1990 <= m.get('year', 0) <= 1999]
+            elif decade_filter == '2000s':
+                filtered = [m for m in filtered if 2000 <= m.get('year', 0) <= 2009]
+            elif decade_filter == '2010s':
+                filtered = [m for m in filtered if 2010 <= m.get('year', 0) <= 2019]
+            elif decade_filter == '2020s':
+                filtered = [m for m in filtered if m.get('year', 0) >= 2020]
+        
+        return filtered
+
+    # ==================== СТАРТ (без тарифа и лимитов) ====================
     async def _handle_start(self, event: MessageCreated):
         user_id = event.message.sender.user_id
         username = getattr(event.message.sender, 'username', '') or ''
@@ -345,25 +453,18 @@ class MaxAdapter:
         except Exception as e:
             logger.error(f"Ошибка регистрации: {e}")
 
-        limits = get_user_limits(user_id)
-
         start_text = (
             "🐾 <b>Гав! Я - КиноИщейка!</b> Добро пожаловать в мир кино! 🎬\n\n"
             "Я помогу тебе найти фильмы, сериалы и мультфильмы на Кинопоиске, которые ты точно полюбишь.\n\n"
-            "📊 <b>Твой тариф:</b> {tariff}\n"
-            "🎬 <b>Мнений сегодня:</b> 0/{limit}\n\n"
             "<b>Вот что я умею:</b>\n\n"
             "🎲 <b>Случайный фильм</b> — найду следы случайного фильма\n"
-            "🔍 <b>Поиск</b> — найду отборные фильмы по названию\n"
+            "🔍 <b>Поиск</b> — найду отборные фильмы по названию (с фильтрами!)\n"
             "🎉 <b>Премьеры</b> — учуяю свежие ожидаемые премьеры\n"
             "🎭 <b>Поиск по актёрам</b> — найду фильмы по имени актёра или режиссёра\n"
             "🐾 <b>Мнение о фильме</b> — расскажу о смысле фильма, его настроении и атмосфере, укажу на плюсы и минусы и поставлю оценку\n"
             "❓ <b>FAQ</b> — ответы на частые вопросы\n"
             "📝 <b>Обратная связь</b> — сообщить об ошибке или оставить отзыв\n\n"
             "👇 <b>Выбери действие в меню ниже:</b>"
-        ).format(
-            tariff=limits.get('tariff_name', 'Щенячий азарт'),
-            limit=limits.get('opinion_limit', 5)
         )
 
         await event.message.answer(
@@ -386,20 +487,48 @@ class MaxAdapter:
             except AttributeError:
                 pass
 
+        # ===== FAQ =====
         if payload == "faq" or payload.startswith("faq_"):
             await self._handle_faq_callback(event, user_id, payload)
             return
 
+        # ===== FEEDBACK =====
         if payload == "feedback" or payload.startswith("feedback_"):
             await self._handle_feedback_callback(event, user_id, payload)
             return
 
-        # Пагинация обращений
-        if payload.startswith("feedback_page_"):
+        # ===== ПАГИНАЦИЯ ОБРАЩЕНИЙ =====
+        if payload.startswith("fb_page_"):
             page = int(payload.split("_")[2])
             await self._show_user_feedback(event, user_id, page)
             return
 
+        # ===== ФИЛЬТРЫ =====
+        if payload.startswith("filter_rating_"):
+            parts = payload.split("_")
+            value = parts[2]
+            query = "_".join(parts[3:]) if len(parts) > 3 else ""
+            await self._handle_filter(event, user_id, query, 'rating_range', value)
+            return
+
+        if payload.startswith("filter_decade_"):
+            parts = payload.split("_")
+            value = parts[2]
+            query = "_".join(parts[3:]) if len(parts) > 3 else ""
+            await self._handle_filter(event, user_id, query, 'decade', value)
+            return
+
+        if payload.startswith("filter_show_"):
+            query = payload.replace("filter_show_", "")
+            await self._handle_filter_show(event, user_id, query)
+            return
+
+        if payload.startswith("filter_reset_"):
+            query = payload.replace("filter_reset_", "")
+            await self._handle_filter_reset(event, user_id, query)
+            return
+
+        # ===== НАВИГАЦИЯ =====
         if payload == "back_to_menu":
             self.user_context.pop(user_id, None)
             await event.message.answer(
@@ -411,6 +540,13 @@ class MaxAdapter:
         if payload == "noop":
             return
 
+        if payload == "new_search":
+            self.user_context.pop(user_id, None)
+            await event.message.answer("🔍 Введи название фильма:")
+            self._get_user_context(user_id)['state'] = 'awaiting_search'
+            return
+
+        # ===== ПАГИНАЦИЯ =====
         if payload.startswith("search_page_"):
             parts = payload.split("_")
             page = int(parts[2])
@@ -424,6 +560,7 @@ class MaxAdapter:
             await self._show_premiers_page(event, user_id, page)
             return
 
+        # ===== ОСНОВНЫЕ КОМАНДЫ =====
         if payload == "random":
             await event.message.answer("🎲 Ищу случайный фильм...")
             await self._send_random_result(event.message.answer)
@@ -444,6 +581,97 @@ class MaxAdapter:
         else:
             await event.message.answer(f"🐾 Неизвестная команда: {payload}")
 
+    # ==================== ФИЛЬТРЫ ====================
+    async def _handle_filter(self, event, user_id, query, filter_type, value):
+        context = self._get_user_context(user_id)
+        filters = context.get('filters', {})
+        
+        if filters.get(filter_type) == value:
+            filters.pop(filter_type, None)
+        else:
+            filters[filter_type] = value
+        
+        context['filters'] = filters
+        
+        full_list = context.get('full_list', [])
+        if not full_list:
+            await event.message.answer("😢 Начни поиск заново.")
+            return
+        
+        filtered = self._apply_filters_to_movies(full_list, filters)
+        context['filtered_list'] = filtered
+        
+        total_count = len(filtered)
+        has_more = total_count >= 100
+        
+        text = f"🔍 Поиск: {query}\n\n"
+        if filters:
+            text += "Активные фильтры:\n"
+            if filters.get('rating_range'):
+                rating_names = {
+                    'new': '🆕 Новинки',
+                    '5-6': '⭐5-6',
+                    '6-7': '⭐6-7',
+                    '7-8': '⭐7-8',
+                    '8-9': '⭐8-9',
+                    '9-10': '⭐9-10'
+                }
+                text += f"• {rating_names.get(filters['rating_range'], filters['rating_range'])}\n"
+            if filters.get('decade'):
+                decade_names = {
+                    'pre1980': '📽 До1980',
+                    '1980s': '📅1980-е',
+                    '1990s': '📅1990-е',
+                    '2000s': '📅2000-е',
+                    '2010s': '📅2010-е',
+                    '2020s': '📅2020-е'
+                }
+                text += f"• {decade_names.get(filters['decade'], filters['decade'])}\n"
+            text += "\n"
+        
+        text += f"Найдено фильмов: {'>' if has_more else ''}{total_count}\n\n"
+        text += "Настрой фильтры и нажми 'Показать карточки'"
+        
+        keyboard = get_filter_keyboard(query, filters, total_count, has_more)
+        await event.message.answer(text, parse_mode="html", attachments=[keyboard])
+
+    async def _handle_filter_show(self, event, user_id, query):
+        context = self._get_user_context(user_id)
+        filtered = context.get('filtered_list', [])
+        full_list = context.get('full_list', [])
+        
+        if not filtered and full_list:
+            filtered = full_list
+            context['filtered_list'] = filtered
+        
+        if not filtered:
+            await event.message.answer("😢 Нет фильмов для показа. Начни поиск заново.")
+            return
+        
+        context['movies'] = filtered
+        context['query'] = query
+        await self._show_search_page(event, user_id, 0, query)
+
+    async def _handle_filter_reset(self, event, user_id, query):
+        context = self._get_user_context(user_id)
+        context['filters'] = {}
+        context['filtered_list'] = []
+        
+        full_list = context.get('full_list', [])
+        if not full_list:
+            await event.message.answer("😢 Начни поиск заново.")
+            return
+        
+        total_count = len(full_list)
+        has_more = total_count >= 100
+        
+        text = f"🔍 Поиск: {query}\n\n"
+        text += f"Найдено фильмов: {'>' if has_more else ''}{total_count}\n\n"
+        text += "Настрой фильтры и нажми 'Показать карточки'"
+        
+        keyboard = get_filter_keyboard(query, {}, total_count, has_more)
+        await event.message.answer(text, parse_mode="html", attachments=[keyboard])
+
     # ==================== FAQ ====================
     async def _handle_faq_callback(self, event, user_id, payload):
         if payload == "faq" or payload == "faq_back":
@@ -456,7 +684,8 @@ class MaxAdapter:
                 "🔍 <b>Как найти фильм?</b>\n\n"
                 "1. Нажми кнопку «🔍 Поиск» в главном меню\n"
                 "2. Введи название фильма\n"
-                "3. Я покажу результаты\n\n"
+                "3. Используй фильтры для уточнения\n"
+                "4. Нажми «Показать карточки»\n\n"
                 "Также можно искать по актёрам кнопкой «🎭 Поиск по актёрам»"
             )
         elif payload == "faq_opinion":
@@ -529,7 +758,6 @@ class MaxAdapter:
         await event.message.answer("🐾 Возвращаюсь в меню обратной связи", attachments=[get_feedback_menu()])
 
     async def _show_user_feedback(self, event, user_id, page=0):
-        """Показывает обращения пользователя с пагинацией (как в TG)"""
         items_per_page = 5
         
         conn = db_module.get_opinions_db_connection()
@@ -566,7 +794,7 @@ class MaxAdapter:
         status_icons = {'new': '🆕', 'in_progress': '🔄', 'resolved': '✅'}
         type_names = {1: '🐛 Ошибка', 2: '📢 Отзыв'}
 
-        text = f"📝 <b>Твои обращения</b> (стр. {page+1}/{total_pages})\n\n"
+        text = f"📝 <b>Твои обращения</b> (Стр. {page+1} из {total_pages})\n\n"
         
         for fb in feedback_list:
             fb_id, fb_type, movie_id, message, status, created_at, comment = fb
@@ -584,11 +812,10 @@ class MaxAdapter:
                 text += f"📝 Ответ: {comment[:100]}\n"
             text += "\n"
 
-        # Кнопки пагинации как в TG
         pagination = get_feedback_pagination_buttons(page, total_pages)
         await event.message.answer(text, parse_mode="html", attachments=[pagination])
 
-    # ==================== ПАГИНАЦИЯ ====================
+    # ==================== ПАГИНАЦИЯ (с номерами страниц) ====================
     async def _show_search_page(self, event, user_id, page, query):
         context = self._get_user_context(user_id)
         movies_list = context.get('movies', [])
@@ -600,6 +827,7 @@ class MaxAdapter:
 
         items_per_page = 3
         total_pages = (len(movies_list) + items_per_page - 1) // items_per_page
+        total_movies = len(movies_list)
 
         if page >= total_pages:
             page = total_pages - 1
@@ -607,12 +835,12 @@ class MaxAdapter:
             page = 0
 
         start_idx = page * items_per_page
-        end_idx = min(start_idx + items_per_page, len(movies_list))
+        end_idx = min(start_idx + items_per_page, total_movies)
 
         await event.message.answer(
             f"📽 <b>Результаты поиска \"{current_query}\"</b>\n"
             f"Страница {page+1} из {total_pages}\n"
-            f"Показаны фильмы {start_idx+1}-{end_idx}",
+            f"Показаны фильмы {start_idx+1}-{end_idx} из {total_movies}",
             parse_mode="html"
         )
 
@@ -646,6 +874,7 @@ class MaxAdapter:
 
         items_per_page = 3
         total_pages = (len(movies_list) + items_per_page - 1) // items_per_page
+        total_movies = len(movies_list)
 
         if page >= total_pages:
             page = total_pages - 1
@@ -653,11 +882,12 @@ class MaxAdapter:
             page = 0
 
         start_idx = page * items_per_page
-        end_idx = min(start_idx + items_per_page, len(movies_list))
+        end_idx = min(start_idx + items_per_page, total_movies)
 
         await event.message.answer(
             f"🎉 <b>Ожидаемые премьеры</b>\n"
-            f"Страница {page+1} из {total_pages}",
+            f"Страница {page+1} из {total_pages}\n"
+            f"Показаны фильмы {start_idx+1}-{end_idx} из {total_movies}",
             parse_mode="html"
         )
 
@@ -691,6 +921,7 @@ class MaxAdapter:
 
         items_per_page = 3
         total_pages = (len(movies_list) + items_per_page - 1) // items_per_page
+        total_movies = len(movies_list)
 
         if page >= total_pages:
             page = total_pages - 1
@@ -698,11 +929,12 @@ class MaxAdapter:
             page = 0
 
         start_idx = page * items_per_page
-        end_idx = min(start_idx + items_per_page, len(movies_list))
+        end_idx = min(start_idx + items_per_page, total_movies)
 
         await event.message.answer(
             f"🎭 <b>Фильмы с участием: {query}</b>\n"
-            f"Страница {page+1} из {total_pages}",
+            f"Страница {page+1} из {total_pages}\n"
+            f"Показаны фильмы {start_idx+1}-{end_idx} из {total_movies}",
             parse_mode="html"
         )
 
@@ -792,7 +1024,7 @@ class MaxAdapter:
             parse_mode="html"
         )
 
-    # ==================== ПОИСК ПО АКТЁРАМ ====================
+    # ==================== ПОИСК (С ФИЛЬТРАМИ) ====================
     async def _handle_message(self, event: MessageCreated):
         user_id = event.message.sender.user_id
         text = event.message.body.text if event.message.body else ""
@@ -873,7 +1105,7 @@ class MaxAdapter:
             attachments=[get_feedback_menu()]
         )
 
-    # ===== ПОИСК =====
+    # ===== ПОИСК С ФИЛЬТРАМИ =====
     async def _perform_search(self, event: MessageCreated, user_id, query):
         if len(query) < 2:
             await event.message.answer("🐾 Введи хотя бы 2 символа.")
@@ -881,17 +1113,30 @@ class MaxAdapter:
             return
 
         await event.message.answer(f"🔍 Ищу: {query}...")
-        movies_list = search_movies_in_db(query, min_rating=0.0, max_rating=10.0)
-
-        if not movies_list:
+        
+        total_count, has_more = search_movies_with_filters(query, filters=None, count_only=True)
+        
+        if total_count == 0:
             await event.message.answer(f"😢 По запросу '{query}' ничего не нашлось.")
             self.user_context.pop(user_id, None)
             return
-
+        
+        full_list = search_movies_with_filters(query, filters=None, count_only=False)
+        
         context = self._get_user_context(user_id)
-        context['movies'] = movies_list
+        context['full_list'] = full_list
         context['query'] = query
-        await self._show_search_page(event, user_id, 0, query)
+        context['filters'] = {}
+        context['filtered_list'] = []
+        context['movies'] = full_list
+        context['state'] = 'search_results'
+        
+        text = f"🔍 Поиск: {query}\n\n"
+        text += f"Найдено фильмов: {'>' if has_more else ''}{total_count}\n\n"
+        text += "Настрой фильтры и нажми 'Показать карточки'"
+        
+        keyboard = get_filter_keyboard(query, {}, total_count, has_more)
+        await event.message.answer(text, parse_mode="html", attachments=[keyboard])
 
     async def _perform_person_search(self, event: MessageCreated, user_id, query):
         if len(query) < 2:
@@ -914,7 +1159,7 @@ class MaxAdapter:
         
         await self._show_person_search_page(event, user_id, 0, query)
 
-    # ==================== МНЕНИЕ О ФИЛЬМЕ (С ССЫЛКОЙ ДЛЯ ПРЕВЬЮ) ====================
+    # ==================== МНЕНИЕ О ФИЛЬМЕ (С ССЫЛКОЙ) ====================
     async def _handle_opinion_command(self, event: MessageCreated):
         user_id = event.message.sender.user_id
         text = event.message.body.text.replace('/opinion', '').strip()
@@ -958,7 +1203,7 @@ class MaxAdapter:
         movie_name = movie_details.get('name', 'Без названия')
         movie_year = movie_details.get('year', '')
 
-        # 👇 1. Отправляем ссылку для красивого превью (перед мнением)
+        # 👇 Ссылка для красивого превью
         kp_url = f"https://www.kinopoisk.ru/film/{movie_id}/"
         await send_func(kp_url)
 
@@ -993,7 +1238,6 @@ class MaxAdapter:
             await send_func("🐾 Гав! Что-то пошло не так. Попробуй позже!")
 
     def _format_opinion(self, opinion, movie_name, movie_year):
-        """Форматирует мнение — без ссылки в тексте, так как ссылка уже отправлена отдельно"""
         return f"Я посмотрела <b>{movie_name}</b> ({movie_year}), и вот что думаю:\n\n{opinion}\n\n🐾"
 
     async def _generate_opinion(self, movie_details):
@@ -1090,7 +1334,7 @@ class MaxAdapter:
 
     # ==================== ЗАПУСК ====================
     async def run(self):
-        logger.info("🚀 MaxAdapter запущен (финальная версия)")
+        logger.info("🚀 MaxAdapter запущен (с фильтрами)")
         await self.bot.delete_webhook()
         await self.dp.start_polling(self.bot)
 
