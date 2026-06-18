@@ -26,6 +26,7 @@ import httpx
 # ==================== ИМПОРТЫ ИЗ CORE ====================
 import user as user_module
 import db as db_module
+import movie as movie_module
 
 try:
     search_persons = movie_module.search_persons
