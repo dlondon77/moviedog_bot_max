@@ -1017,29 +1017,34 @@ class MaxAdapter:
     # ===== АГЕНТ =====
     async def _handle_agent(self, event: MessageCreated, user_id: int, query: str):
         """Обработка запросов к ИИ-агенту"""
-        limits = get_user_limits(user_id)
-        stats = get_user_stats(user_id, date.today().isoformat())
-
-        if stats.get('opinion_count', 0) >= limits.get('opinion_limit', 5):
-            await event.message.answer(
-                f"🐾 Сегодня у тебя уже использовано {stats['opinion_count']} мнений из {limits['opinion_limit']}.\n"
-                f"Агент — это платная фишка!\n\n"
-                f"💰 Оформи подписку, чтобы снять ограничения:\n"
-                f"• 🐕 Охотничий (199 ₽) — 5 запросов в день\n"
-                f"• 🕵️ Ищейка (399 ₽) — 20 запросов в день\n"
-                f"• 🐺 Вожак (999 ₽) — безлимит"
-            )
-            return
-
+        
+        # Для админов — безлимит
+        if user_id not in ADMIN_IDS:
+            limits = get_user_limits(user_id)
+            stats = get_user_stats(user_id, date.today().isoformat())
+            
+            if stats.get('opinion_count', 0) >= limits.get('opinion_limit', 5):
+                await event.message.answer(
+                    f"🐾 Сегодня у тебя уже использовано {stats['opinion_count']} мнений из {limits['opinion_limit']}.\n"
+                    f"Агент — это платная фишка!\n\n"
+                    f"💰 Оформи подписку, чтобы снять ограничения:\n"
+                    f"• 🐕 Охотничий (199 ₽) — 5 запросов в день\n"
+                    f"• 🕵️ Ищейка (399 ₽) — 20 запросов в день\n"
+                    f"• 🐺 Вожак (999 ₽) — безлимит"
+                )
+                return
+    
         await event.message.answer("🤖 Думаю... (это может занять 10-15 секунд)")
-
+    
         if not ai_client:
             await event.message.answer("😢 Генерация временно недоступна. Попробуй позже.")
             return
-
+    
         try:
             response = await run_agent(query, user_id, ai_client)
-            increment_stat_counter(user_id, 'opinion_count')
+            # Считаем только для обычных пользователей
+            if user_id not in ADMIN_IDS:
+                increment_stat_counter(user_id, 'opinion_count')
             await event.message.answer(response)
         except Exception as e:
             logger.error(f"Ошибка агента: {e}")
