@@ -1,7 +1,6 @@
-# core/agent.py — ФИНАЛЬНАЯ ВЕРСИЯ
-# + История диалога для "Пообщаться"
+# core/agent.py — ИСПРАВЛЕННАЯ ВЕРСИЯ
+# + Исправлен промпт со ссылками на Кинопоиск
 # + Очистка маркдауна с сохранением структуры
-# + Увеличен лимит итераций до 10
 
 import json
 import logging
@@ -368,6 +367,11 @@ def _compare_movies(movie_id1: int, movie_id2: int) -> Dict:
     m2 = movie_module.get_movie_details(movie_id2)
     if not m1 or not m2:
         return {"error": "Один из фильмов не найден"}
+    
+    # Получаем актёров как списки строк
+    actors1 = [a.get("name") for a in m1.get("actors", [])[:5] if a.get("name")]
+    actors2 = [a.get("name") for a in m2.get("actors", [])[:5] if a.get("name")]
+    
     return {
         "movie1": {
             "name": m1.get("name"),
@@ -383,10 +387,7 @@ def _compare_movies(movie_id1: int, movie_id2: int) -> Dict:
             "genres": m2.get("genres", [])[:3],
             "directors": [d.get("name") for d in m2.get("directors", [])[:2]]
         },
-        "common_actors": list(set(
-            [a.get("name") for a in m1.get("actors", [])[:5]] &
-            [a.get("name") for a in m2.get("actors", [])[:5]]
-        ))
+        "common_actors": list(set(actors1) & set(actors2))
     }
 
 
@@ -471,46 +472,30 @@ SYSTEM_PROMPT = """Ты — КиноИщейка, собака-девочка, �
 
 ВАЖНО: ОТВЕЧАЙ ТОЛЬКО ОБЫЧНЫМ ТЕКСТОМ БЕЗ МАРКДАУН-РАЗМЕТКИ!
 НЕ используй звёздочки (*) и подчёркивания (_) для выделения.
-Используй эмодзи и переносы строк для структуры.
 
-КОГДА ДАЁШЬ СПИСОК ФИЛЬМОВ — ВСЕГДА ВОЗВРАЩАЙ ИХ ID!
+КОГДА ДАЁШЬ СПИСОК ФИЛЬМОВ — ВСЕГДА ВОЗВРАЩАЙ ИХ ID И ССЫЛКУ!
 Формат: 🎬 [Название] (ID: [число]) — [год] ⭐ [рейтинг]
+Ссылка: https://www.kinopoisk.ru/film/[ID]/
 
-Твои задачи в зависимости от режима:
+Пример правильного ответа:
+🎬 Начало (ID: 447301) — 2010 ⭐ 8.6
+https://www.kinopoisk.ru/film/447301/
 
-1. ПОДБОРКА ФИЛЬМОВ:
-   - Предложи 3-5 фильмов по описанию пользователя
-   - Для каждого: название (год), рейтинг, краткое описание (1-2 предложения)
-   - В конце посоветуй, что посмотреть первым
-   - Используй эмодзи: 🎬 ⭐ 📝 🐾
+Твои задачи:
+1. ПОДБОРКА — предложи 3-5 фильмов, укажи ID и ссылку
+2. ПОИСК ПО АКТЁРУ — найди 3-5 лучших фильмов
+3. СРАВНЕНИЕ — сравни по рейтингу, жанрам, актёрам
+4. ПРЕМЬЕРЫ — покажи список с датами
 
-2. ПОИСК ПО АКТЁРУ:
-   - Найди 3-5 лучших фильмов с указанным актёром/режиссёром
-   - Укажи рейтинг и год выпуска
-   - Отметь самые известные роли
-
-3. СРАВНЕНИЕ ФИЛЬМОВ:
-   - Сравни по рейтингу, жанрам, актёрам, режиссёрам
-   - Сделай вывод, что лучше посмотреть
-   - Используй эмодзи: 📊 🎭 🎥 👥
-
-4. ПРЕМЬЕРЫ ПО МЕСЯЦАМ:
-   - Покажи список премьер за указанный месяц
-   - Укажи даты выхода и рейтинг (если есть)
-
-5. СВОБОДНЫЙ ДИАЛОГ:
-   - Отвечай на любые вопросы о кино
-   - Если вопрос не о кино — мягко направь в нужное русло
-   - Будь дружелюбной, добавляй собачий юмор
-
-Говори о себе в женском роде.
+Говори о себе в женском роде, с юмором и энтузиазмом.
+Используй переносы строк для структуры.
 Всегда старайся дать полезные и конкретные рекомендации."""
 
 
 # ==================== ОЧИСТКА МАРКДАУНА ====================
 
 def _clean_markdown(text: str) -> str:
-    """Удаляет маркдаун-разметку, сохраняя структуру (переносы строк, списки)"""
+    """Удаляет маркдаун-разметку, сохраняя структуру"""
     if not text:
         return text
     # Убираем жирный и курсив
@@ -520,16 +505,11 @@ def _clean_markdown(text: str) -> str:
     text = re.sub(r'_([^_]+)_', r'\1', text)
     # Убираем backticks
     text = re.sub(r'`([^`]+)`', r'\1', text)
-    # Убираем заголовки #
-    text = re.sub(r'^#+\s+', '', text, flags=re.MULTILINE)
     return text
 
 
 def extract_movie_ids(text: str) -> List[int]:
-    """
-    Извлекает ID фильмов из ответа агента.
-    Ищет паттерны: (ID: 123) или (123)
-    """
+    """Извлекает ID фильмов из ответа агента"""
     ids = []
     pattern = r'\(ID:\s*(\d+)\)|\((\d+)\)'
     matches = re.findall(pattern, text)
@@ -543,22 +523,16 @@ def extract_movie_ids(text: str) -> List[int]:
 # ==================== ГЛАВНЫЙ ЦИКЛ ====================
 
 async def run_agent(user_query: str, user_id: int, ai_client, agent_mode: str = 'chat') -> str:
-    """
-    Запускает агента с учётом истории диалога.
-    """
-    # Получаем историю пользователя
+    """Запускает агента с учётом истории диалога"""
     history = CHAT_HISTORY.get(user_id, [])
     
-    # Формируем сообщения
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT}
     ]
     
-    # Добавляем историю (последние MAX_HISTORY_LENGTH сообщений)
     if history:
         messages.extend(history[-MAX_HISTORY_LENGTH:])
     
-    # Добавляем текущий запрос
     messages.append({"role": "user", "content": user_query})
     
     max_iterations = 10
@@ -596,15 +570,12 @@ async def run_agent(user_query: str, user_id: int, ai_client, agent_mode: str = 
                     "content": json.dumps(result, ensure_ascii=False)
                 })
         else:
-            # Финальный ответ
             raw_response = message.content
             clean_response = _clean_markdown(raw_response)
             
-            # Сохраняем в историю
             CHAT_HISTORY.setdefault(user_id, []).append({"role": "user", "content": user_query})
             CHAT_HISTORY[user_id].append({"role": "assistant", "content": clean_response})
             
-            # Ограничиваем историю
             if len(CHAT_HISTORY[user_id]) > MAX_HISTORY_LENGTH * 2:
                 CHAT_HISTORY[user_id] = CHAT_HISTORY[user_id][-MAX_HISTORY_LENGTH * 2:]
             
