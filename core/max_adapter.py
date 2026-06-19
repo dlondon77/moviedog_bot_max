@@ -1,5 +1,8 @@
-# core/max_adapter.py — ТОЛЬКО АДАПТЕР
-# Вся логика агента вынесена в core/agent.py
+# core/max_adapter.py — ПОЛНАЯ ВЕРСИЯ
+# + Меню агента (5 сценариев)
+# + Свободный диалог
+# + Гибридный роутинг
+# + Админ-режим (безлимит)
 
 import logging
 import configparser
@@ -22,11 +25,14 @@ from maxapi.types import BotStarted, MessageCreated
 from openai import OpenAI
 import httpx
 
+# ==================== КОНСТАНТЫ ====================
+ADMIN_IDS = [7191208]  # пользователи с безлимитным доступом
+
 # ==================== ИМПОРТЫ ИЗ CORE ====================
 import user as user_module
 import movie as movie_module
 import db as db_module
-from core.agent import run_agent  # ← агент импортируется как библиотека
+from core.agent import run_agent
 
 register_user = user_module.register_user
 get_user_limits = user_module.get_user_limits
@@ -42,8 +48,6 @@ search_movies_by_person_in_db = movie_module.search_movies_by_person_in_db
 get_premier_movies_from_db = movie_module.get_premier_movies_from_db
 search_movies_with_filters = movie_module.search_movies_with_filters
 
-# ==================== КОНСТАНТЫ ====================
-ADMIN_IDS = [7191208]  # пользователи с безлимитным доступом
 
 # ==================== КЭШ МНЕНИЙ ====================
 def get_cached_opinion(movie_id: int):
@@ -134,12 +138,34 @@ def get_main_menu():
             {"type": "callback", "text": "🎭 Поиск по актёрам", "payload": "person"}
         ],
         [
-            {"type": "callback", "text": "👤 Мой профиль", "payload": "profile"},
-            {"type": "callback", "text": "🤖 ИИ-агент", "payload": "agent"}
+            {"type": "callback", "text": "🤖 ИИ-агент", "payload": "agent_menu"},
+            {"type": "callback", "text": "💬 Пообщаться", "payload": "chat"}
         ],
         [
-            {"type": "callback", "text": "❓ FAQ", "payload": "faq"},
+            {"type": "callback", "text": "👤 Мой профиль", "payload": "profile"},
+            {"type": "callback", "text": "❓ FAQ", "payload": "faq"}
+        ],
+        [
             {"type": "callback", "text": "📝 Обратная связь", "payload": "feedback"}
+        ]
+    ]
+    return InlineKeyboardMarkup(buttons)
+
+def get_agent_menu():
+    buttons = [
+        [
+            {"type": "callback", "text": "🎬 Подобрать фильм", "payload": "agent_recommend"},
+            {"type": "callback", "text": "🎭 Поиск по актёру", "payload": "agent_actor"}
+        ],
+        [
+            {"type": "callback", "text": "⭐ Сравнить фильмы", "payload": "agent_compare"},
+            {"type": "callback", "text": "📅 Премьеры по месяцам", "payload": "agent_premieres"}
+        ],
+        [
+            {"type": "callback", "text": "💬 Свободный вопрос", "payload": "chat"}
+        ],
+        [
+            {"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}
         ]
     ]
     return InlineKeyboardMarkup(buttons)
@@ -300,7 +326,7 @@ class MaxAdapter:
         self.user_context = {}
 
         self._register_handlers()
-        logger.info("✅ MaxAdapter инициализирован")
+        logger.info("✅ MaxAdapter инициализирован (с меню агента)")
 
     def _register_handlers(self):
         @self.dp.bot_started()
@@ -342,24 +368,6 @@ class MaxAdapter:
         async def on_opinion(event: MessageCreated):
             await self._handle_opinion_command(event)
 
-        @self.dp.message_created(F.message.body.text == "/agent")
-        async def on_agent(event: MessageCreated):
-            user_id = event.message.sender.user_id
-            self._get_user_context(user_id)['state'] = 'awaiting_agent'
-            await event.message.answer(
-                "🤖 <b>ИИ-агент КиноИщейки</b>\n\n"
-                "Задай любой вопрос о кино, и я найду ответ!\n\n"
-                "<b>Примеры запросов:</b>\n"
-                "• «Найди фильм с Брэдом Питтом, похожий на Бойцовский клуб»\n"
-                "• «Посоветуй хороший триллер на вечер»\n"
-                "• «Какие фильмы с Ди Каприо вышли после 2010 года?»\n"
-                "• «Сравни Матрицу и Начало»\n"
-                "• «Что выходит в июне?»\n"
-                "• «Посоветуй что-то на основе моих любимых фильмов»\n\n"
-                "🐾 <i>Это может занять 10-15 секунд</i>",
-                parse_mode="html"
-            )
-
         @self.dp.message_created(F.message.body.text == "/faq")
         async def on_faq(event: MessageCreated):
             await event.message.answer(
@@ -387,7 +395,6 @@ class MaxAdapter:
                 "/person — поиск по актёрам/режиссёрам\n"
                 "/opinion [название или ID] — мнение о фильме\n"
                 "/profile — мой профиль\n"
-                "/agent — ИИ-агент\n"
                 "/faq — частые вопросы\n"
                 "/feedback — обратная связь\n"
                 "/help — это сообщение",
@@ -438,6 +445,33 @@ class MaxAdapter:
                 filtered = [m for m in filtered if m.get('year', 0) >= 2020]
         return filtered
 
+    # ==================== ГИБРИДНЫЙ РОУТИНГ ====================
+    def _detect_command(self, text: str) -> str:
+        """Определяет, на что похож запрос пользователя"""
+        text_lower = text.lower().strip()
+        
+        # Признаки поиска по названию
+        search_keywords = ['найди', 'ищи', 'поиск', 'фильм', 'найти', 'покажи']
+        if any(kw in text_lower for kw in search_keywords) and len(text_lower) > 3:
+            return 'search'
+        
+        # Признаки поиска по актёрам
+        person_keywords = ['актёр', 'актера', 'режиссёр', 'с участием', 'снимался']
+        if any(kw in text_lower for kw in person_keywords):
+            return 'person'
+        
+        # Признаки случайного фильма
+        random_keywords = ['случайный', 'рандом', 'что-нибудь', 'любой']
+        if any(kw in text_lower for kw in random_keywords):
+            return 'random'
+        
+        # Признаки мнения
+        opinion_keywords = ['мнение', 'расскажи о', 'что думаешь', 'какой фильм']
+        if any(kw in text_lower for kw in opinion_keywords):
+            return 'opinion'
+        
+        return None
+
     # ==================== СТАРТ ====================
     async def _handle_start(self, event: MessageCreated):
         user_id = event.message.sender.user_id
@@ -465,8 +499,9 @@ class MaxAdapter:
             "🔍 <b>Поиск</b> — найду отборные фильмы по названию (с фильтрами!)\n"
             "🎉 <b>Премьеры</b> — учуяю свежие ожидаемые премьеры\n"
             "🎭 <b>Поиск по актёрам</b> — найду фильмы по имени актёра или режиссёра\n"
-            "🐾 <b>Мнение о фильме</b> — расскажу о смысле фильма, его настроении и атмосфере, укажу на плюсы и минусы и поставлю оценку\n"
-            "🤖 <b>ИИ-агент</b> — задай любой вопрос о кино, я сам найду ответ!\n"
+            "🐾 <b>Мнение о фильме</b> — расскажу о смысле фильма, его настроении и атмосфере\n"
+            "🤖 <b>ИИ-агент</b> — выбери сценарий: подборка, сравнение, премьеры\n"
+            "💬 <b>Пообщаться</b> — задай любой вопрос о кино\n"
             "❓ <b>FAQ</b> — ответы на частые вопросы\n"
             "📝 <b>Обратная связь</b> — сообщить об ошибке или оставить отзыв\n\n"
             "👇 <b>Выбери действие в меню ниже:</b>"
@@ -492,36 +527,100 @@ class MaxAdapter:
             except AttributeError:
                 pass
 
-        if payload == "faq" or payload.startswith("faq_"):
-            await self._handle_faq_callback(event, user_id, payload)
-            return
-
-        if payload == "feedback" or payload.startswith("feedback_"):
-            await self._handle_feedback_callback(event, user_id, payload)
-            return
-
-        if payload == "agent":
-            self._get_user_context(user_id)['state'] = 'awaiting_agent'
+        # ===== МЕНЮ АГЕНТА =====
+        if payload == "agent_menu":
             await event.message.answer(
                 "🤖 <b>ИИ-агент КиноИщейки</b>\n\n"
-                "Задай любой вопрос о кино, и я найду ответ!\n\n"
-                "<b>Примеры запросов:</b>\n"
-                "• «Найди фильм с Брэдом Питтом, похожий на Бойцовский клуб»\n"
-                "• «Посоветуй хороший триллер на вечер»\n"
-                "• «Какие фильмы с Ди Каприо вышли после 2010 года?»\n"
-                "• «Сравни Матрицу и Начало»\n"
-                "• «Что выходит в июне?»\n"
-                "• «Посоветуй что-то на основе моих любимых фильмов»\n\n"
-                "🐾 <i>Это может занять 10-15 секунд</i>",
+                "Выбери, что я могу для тебя сделать:\n\n"
+                "🎬 <b>Подобрать фильм</b> — расскажи, что хочешь посмотреть\n"
+                "🎭 <b>Поиск по актёру</b> — найду фильмы с любимым актёром\n"
+                "⭐ <b>Сравнить фильмы</b> — сравню два фильма по параметрам\n"
+                "📅 <b>Премьеры по месяцам</b> — что выходит в этом месяце\n"
+                "💬 <b>Свободный вопрос</b> — спроси что угодно о кино",
+                parse_mode="html",
+                attachments=[get_agent_menu()]
+            )
+            return
+
+        # ===== СЦЕНАРИИ АГЕНТА =====
+        if payload == "agent_recommend":
+            self._get_user_context(user_id)['agent_mode'] = 'recommend'
+            self._get_user_context(user_id)['state'] = 'awaiting_agent'
+            await event.message.answer(
+                "🎬 <b>Подбор фильма</b>\n\n"
+                "Опиши, что хочешь посмотреть:\n"
+                "• Жанр (комедия, драма, триллер)\n"
+                "• Настроение (весёлое, грустное, напряжённое)\n"
+                "• Любимые фильмы (для примера)\n\n"
+                "Например: «Хочу что-то лёгкое и романтичное, как «Реальная любовь»",
                 parse_mode="html"
             )
             return
 
+        if payload == "agent_actor":
+            self._get_user_context(user_id)['agent_mode'] = 'actor'
+            self._get_user_context(user_id)['state'] = 'awaiting_agent'
+            await event.message.answer(
+                "🎭 <b>Поиск по актёру</b>\n\n"
+                "Напиши имя актёра или режиссёра,\n"
+                "и я найду его лучшие фильмы.\n\n"
+                "Например: «Фильмы с Брэдом Питтом»",
+                parse_mode="html"
+            )
+            return
+
+        if payload == "agent_compare":
+            self._get_user_context(user_id)['agent_mode'] = 'compare'
+            self._get_user_context(user_id)['state'] = 'awaiting_agent'
+            await event.message.answer(
+                "⭐ <b>Сравнение фильмов</b>\n\n"
+                "Напиши два фильма, которые хочешь сравнить.\n\n"
+                "Например: «Сравни Матрицу и Начало»",
+                parse_mode="html"
+            )
+            return
+
+        if payload == "agent_premieres":
+            self._get_user_context(user_id)['agent_mode'] = 'premieres'
+            self._get_user_context(user_id)['state'] = 'awaiting_agent'
+            await event.message.answer(
+                "📅 <b>Премьеры по месяцам</b>\n\n"
+                "Напиши месяц и год, или просто месяц.\n\n"
+                "Например: «Что выходит в июне?»",
+                parse_mode="html"
+            )
+            return
+
+        # ===== СВОБОДНЫЙ ДИАЛОГ =====
+        if payload == "chat":
+            self._get_user_context(user_id)['agent_mode'] = 'chat'
+            self._get_user_context(user_id)['state'] = 'awaiting_agent'
+            await event.message.answer(
+                "💬 <b>Свободный диалог</b>\n\n"
+                "Можешь спросить меня о чём угодно в мире кино!\n\n"
+                "Я отвечу, если это про фильмы, сериалы или актёров.\n"
+                "А если нет — мягко направлю в нужное русло 🐾",
+                parse_mode="html"
+            )
+            return
+
+        # ===== FAQ =====
+        if payload == "faq" or payload.startswith("faq_"):
+            await self._handle_faq_callback(event, user_id, payload)
+            return
+
+        # ===== FEEDBACK =====
+        if payload == "feedback" or payload.startswith("feedback_"):
+            await self._handle_feedback_callback(event, user_id, payload)
+            return
+
+        # ===== ПАГИНАЦИЯ ОБРАЩЕНИЙ =====
         if payload.startswith("fb_page_"):
             page = int(payload.split("_")[2])
             await self._show_user_feedback(event, user_id, page)
             return
 
+        # ===== ФИЛЬТРЫ =====
         if payload.startswith("filter_rating_"):
             parts = payload.split("_")
             value = parts[2]
@@ -546,6 +645,7 @@ class MaxAdapter:
             await self._handle_filter_reset(event, user_id, query)
             return
 
+        # ===== НАВИГАЦИЯ =====
         if payload == "back_to_menu":
             self.user_context.pop(user_id, None)
             await event.message.answer(
@@ -563,6 +663,7 @@ class MaxAdapter:
             self._get_user_context(user_id)['state'] = 'awaiting_search'
             return
 
+        # ===== ПАГИНАЦИЯ =====
         if payload.startswith("search_page_"):
             parts = payload.split("_")
             page = int(parts[2])
@@ -576,6 +677,7 @@ class MaxAdapter:
             await self._show_premiers_page(event, user_id, page)
             return
 
+        # ===== ОСНОВНЫЕ КОМАНДЫ =====
         if payload == "random":
             await event.message.answer("🎲 Ищу случайный фильм...")
             await self._send_random_result(event.message.answer)
@@ -992,6 +1094,7 @@ class MaxAdapter:
         context = self._get_user_context(user_id)
         state = context.get('state')
 
+        # ===== ОБРАБОТКА FEEDBACK =====
         if state == 'awaiting_feedback_movie_id':
             await self._process_feedback_movie_id(event, user_id, text)
             return
@@ -1001,9 +1104,27 @@ class MaxAdapter:
         if state == 'awaiting_feedback_review':
             await self._process_feedback_review(event, user_id, text)
             return
+
+        # ===== ОБРАБОТКА АГЕНТА =====
         if state == 'awaiting_agent':
+            # Гибридный роутинг: проверяем, не простая ли это команда
+            command = self._detect_command(text)
+            if command:
+                if command == 'search':
+                    await self._perform_search(event, user_id, text)
+                elif command == 'person':
+                    await self._perform_person_search(event, user_id, text)
+                elif command == 'random':
+                    await self._handle_random(event)
+                elif command == 'opinion':
+                    await self._process_opinion(event, user_id, text, event.message.answer)
+                return
+            
+            # Если не распознали — запускаем агента
             await self._handle_agent(event, user_id, text)
             return
+
+        # ===== ОСТАЛЬНЫЕ СОСТОЯНИЯ =====
         if state == 'awaiting_search':
             await self._perform_search(event, user_id, text)
         elif state == 'awaiting_person':
@@ -1012,40 +1133,64 @@ class MaxAdapter:
             await self._process_opinion(event, user_id, text, event.message.answer)
             self.user_context.pop(user_id, None)
         else:
+            # По умолчанию — поиск
             await self._perform_search(event, user_id, text)
 
     # ===== АГЕНТ =====
     async def _handle_agent(self, event: MessageCreated, user_id: int, query: str):
-        """Обработка запросов к ИИ-агенту"""
+        """Обработка запросов к ИИ-агенту (с учётом режима)"""
         
-        # Для админов — безлимит
+        context = self._get_user_context(user_id)
+        agent_mode = context.get('agent_mode', 'chat')
+        
+        # Проверяем лимиты для агента (админы — безлимит)
         if user_id not in ADMIN_IDS:
             limits = get_user_limits(user_id)
             stats = get_user_stats(user_id, date.today().isoformat())
-            
             if stats.get('opinion_count', 0) >= limits.get('opinion_limit', 5):
                 await event.message.answer(
-                    f"🐾 Сегодня у тебя уже использовано {stats['opinion_count']} мнений из {limits['opinion_limit']}.\n"
-                    f"Агент — это платная фишка!\n\n"
-                    f"💰 Оформи подписку, чтобы снять ограничения:\n"
-                    f"• 🐕 Охотничий (199 ₽) — 5 запросов в день\n"
-                    f"• 🕵️ Ищейка (399 ₽) — 20 запросов в день\n"
-                    f"• 🐺 Вожак (999 ₽) — безлимит"
+                    f"🐾 Сегодня у тебя уже использовано {stats['opinion_count']} мнений.\n"
+                    f"Агент — платная фишка!\n\n"
+                    f"💰 Оформи подписку для безлимита!"
                 )
                 return
-    
+
+        # Формируем запрос с учётом режима
+        if agent_mode == 'recommend':
+            enhanced_query = f"Сделай подборку фильмов по запросу: {query}. Предложи 3-5 вариантов с объяснением."
+        elif agent_mode == 'actor':
+            enhanced_query = f"Найди лучшие фильмы с актёром или режиссёром: {query}. Дай 3-5 вариантов с рейтингом и кратким описанием."
+        elif agent_mode == 'compare':
+            enhanced_query = f"Сравни эти два фильма по рейтингу, жанрам, актёрам и режиссёрам: {query}. Сделай вывод, что лучше посмотреть."
+        elif agent_mode == 'premieres':
+            enhanced_query = f"Покажи премьеры за указанный период: {query}. Дай список с названиями и датами."
+        else:  # chat — свободный диалог
+            enhanced_query = query
+
         await event.message.answer("🤖 Думаю... (это может занять 10-15 секунд)")
-    
+
         if not ai_client:
-            await event.message.answer("😢 Генерация временно недоступна. Попробуй позже.")
+            await event.message.answer("😢 Генерация временно недоступна.")
             return
-    
+
         try:
-            response = await run_agent(query, user_id, ai_client)
-            # Считаем только для обычных пользователей
+            response = await run_agent(enhanced_query, user_id, ai_client)
             if user_id not in ADMIN_IDS:
                 increment_stat_counter(user_id, 'opinion_count')
             await event.message.answer(response)
+            
+            # Кнопки после ответа агента
+            agent_action_map = {
+                'recommend': ('подборка', 'agent_recommend'),
+                'actor': ('поиск по актёру', 'agent_actor'),
+                'compare': ('сравнение', 'agent_compare'),
+                'premieres': ('премьеры', 'agent_premieres'),
+                'chat': ('вопрос', 'chat')
+            }
+            action_name, action_payload = agent_action_map.get(agent_mode, ('вопрос', 'chat'))
+            keyboard = get_action_keyboard(action_name, action_payload)
+            await event.message.answer("👇 Что дальше?", attachments=[keyboard])
+            
         except Exception as e:
             logger.error(f"Ошибка агента: {e}")
             await event.message.answer("🐾 Гав! Что-то пошло не так. Попробуй позже!")
@@ -1154,83 +1299,58 @@ class MaxAdapter:
         await self._process_opinion(event, user_id, str(movie_id), event.message.answer)
 
     async def _process_opinion(self, event, user_id, query, send_func):
-        """
-        Генерация мнения о фильме.
-        Для админов (7191208) — безлимит.
-        """
-        # ===== ПРОВЕРКА ЛИМИТОВ (только для обычных пользователей) =====
+        # Проверка лимитов (админы — безлимит)
         if user_id not in ADMIN_IDS:
             limits = get_user_limits(user_id)
             stats = get_user_stats(user_id, date.today().isoformat())
-            
             if stats['opinion_count'] >= limits['opinion_limit']:
                 await send_func(
                     f"🐾 Сегодня я уже высказала {stats['opinion_count']} мнений из {limits['opinion_limit']}.\n"
-                    f"Лимит обновится завтра!\n\n"
-                    f"💰 Хочешь больше? Оформи подписку от 199 ₽/мес"
+                    f"Лимит обновится завтра!"
                 )
                 return
         else:
-            # Для админа — безлимит, просто логируем
             logger.info(f"👑 Админ {user_id} запросил мнение (безлимит)")
-    
-        # ===== ПОИСК ФИЛЬМА =====
+
         movie_details = None
-        
-        # Пробуем как ID
         if query.isdigit():
             movie_details = get_movie_details(int(query))
-        
-        # Если не нашли — ищем по названию
         if not movie_details:
             movies = search_movies_in_db(query, min_rating=0.0, max_rating=10.0)
             if movies:
                 movie_details = get_movie_details(movies[0]['id'])
-        
         if not movie_details:
             await send_func(f"😢 Не нашла фильм '{query}'. Проверь название или ID.")
             return
-    
+
         movie_id = movie_details['id']
         movie_name = movie_details.get('name', 'Без названия')
         movie_year = movie_details.get('year', '')
-    
-        # ===== ОТПРАВЛЯЕМ ССЫЛКУ ДЛЯ КРАСИВОГО ПРЕВЬЮ =====
-        kp_url = f"https://www.kinopoisk.ru/film/{movie_id}/"
-        await send_func(kp_url)
-    
-        # ===== ПРОВЕРЯЕМ КЭШ =====
+
         cached = get_cached_opinion(movie_id)
         if cached:
-            formatted_opinion = self._format_opinion(cached, movie_name, movie_year)
+            formatted_opinion = self._format_opinion(cached, movie_name, movie_year, movie_id)
             await send_func(formatted_opinion, parse_mode="html")
-            
-            # Увеличиваем счётчик только для обычных пользователей
             if user_id not in ADMIN_IDS:
                 increment_stat_counter(user_id, 'opinion_count')
             record_user_opinion(user_id, movie_id)
-            
             await send_func("🏠", attachments=[get_action_keyboard(None, None, None)])
             return
-    
-        # ===== ГЕНЕРАЦИЯ НОВОГО МНЕНИЯ =====
+
         await send_func(f"🐾 Смотрю <b>{movie_name}</b> ({movie_year}) в ускоренном режиме... 🎬", parse_mode="html")
-    
+
         if not ai_client:
-            await send_func("😢 Генерация мнений временно недоступна. Попробуй позже.")
+            await send_func("😢 Генерация мнений временно недоступна.")
             return
-    
+
         try:
             opinion = await self._generate_opinion(movie_details)
             if opinion:
                 save_opinion_cache(movie_id, opinion)
-                
-                # Увеличиваем счётчик только для обычных пользователей
                 if user_id not in ADMIN_IDS:
                     increment_stat_counter(user_id, 'opinion_count')
                 record_user_opinion(user_id, movie_id)
-                
-                formatted_opinion = self._format_opinion(opinion, movie_name, movie_year)
+                formatted_opinion = self._format_opinion(opinion, movie_name, movie_year, movie_id)
                 await send_func(formatted_opinion, parse_mode="html")
                 await send_func("🏠", attachments=[get_action_keyboard(None, None, None)])
             else:
@@ -1239,8 +1359,10 @@ class MaxAdapter:
             logger.error(f"Ошибка генерации: {e}")
             await send_func("🐾 Гав! Что-то пошло не так. Попробуй позже!")
 
-    def _format_opinion(self, opinion, movie_name, movie_year):
-        return f"Я посмотрела <b>{movie_name}</b> ({movie_year}), и вот что думаю:\n\n{opinion}\n\n🐾"
+    def _format_opinion(self, opinion, movie_name, movie_year, movie_id):
+        kp_url = f"https://www.kinopoisk.ru/film/{movie_id}/"
+        title_with_link = f"<a href='{kp_url}'><b>{movie_name}</b></a> ({movie_year})"
+        return f"Я посмотрела {title_with_link}, и вот что думаю:\n\n{opinion}\n\n🐾"
 
     async def _generate_opinion(self, movie_details):
         title = movie_details.get('name', 'Без названия')
@@ -1322,7 +1444,7 @@ class MaxAdapter:
 
     # ==================== ЗАПУСК ====================
     async def run(self):
-        logger.info("🚀 MaxAdapter запущен")
+        logger.info("🚀 MaxAdapter запущен (с меню агента)")
         await self.bot.delete_webhook()
         await self.dp.start_polling(self.bot)
 
