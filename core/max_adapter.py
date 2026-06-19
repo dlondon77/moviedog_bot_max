@@ -1,8 +1,8 @@
 # core/max_adapter.py — ИСПРАВЛЕННАЯ ВЕРСИЯ
-# + Исправлен InlineKeyboardMarkup
-# + "Поиск по актёрам" → "Поиск по персонам"
-# + Карточка фильма → только ссылка + кнопка "Мнение"
-# + "Куда бежим дальше?" — отдельное сообщение с кнопками
+# + Мнение: полная карточка + ссылка (предпросмотр)
+# + Кнопка "В главное меню" в пагинации
+# + "Показать карточки" для всех подборок агента
+# + Усилен промт (без приветствий)
 
 import logging
 import configparser
@@ -183,6 +183,10 @@ def get_pagination_buttons(current_page: int, total_pages: int, prefix: str, que
     if current_page < total_pages - 1:
         row.append({"type": "callback", "text": "Вперёд ▶️", "payload": f"{prefix}_page_{current_page+1}_{query}"})
     buttons.append(row)
+    # 👇 Кнопка "В главное меню"
+    buttons.append([
+        {"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}
+    ])
     return InlineKeyboardMarkup(buttons)
 
 def get_action_keyboard(action_name: str = None, action_payload: str = None, extra_buttons: list = None):
@@ -322,7 +326,7 @@ class MaxAdapter:
         self.user_context = {}
 
         self._register_handlers()
-        logger.info("✅ MaxAdapter инициализирован")
+        logger.info("✅ MaxAdapter инициализирован (исправленная версия)")
 
     def _register_handlers(self):
         @self.dp.bot_started()
@@ -1025,23 +1029,24 @@ class MaxAdapter:
             await send_func("😢 Не могу найти информацию о фильме.")
             return
         
-        movie_id = movie_details.get('id')
-        movie_name = movie_details.get('name', 'Без названия')
-        
         # 1. Отправляем ссылку для красивого превью
-        kp_url = f"https://www.kinopoisk.ru/film/{movie_id}/"
+        kp_url = f"https://www.kinopoisk.ru/film/{movie_details['id']}/"
         await send_func(kp_url)
         
-        # 2. Отправляем текст с кнопкой "Мнение"
-        extra_buttons = [[
-            {"type": "callback", "text": "🐾 Мнение о фильме", "payload": f"opinion_{movie_id}"}
-        ]]
-        keyboard = get_action_keyboard("случайный фильм", "random", extra_buttons)
-        await send_func(
-            f"🎬 <b>{movie_name}</b>\nНажми кнопку, чтобы узнать мнение:",
-            parse_mode='html',
-            attachments=[keyboard]
-        )
+        # 2. Отправляем карточку с кнопкой
+        card_text, _ = format_movie_card(movie_details)
+        if card_text:
+            extra_buttons = [[
+                {"type": "callback", "text": "🐾 Мнение о фильме", "payload": f"opinion_{movie_details['id']}"}
+            ]]
+            keyboard = get_action_keyboard("случайный фильм", "random", extra_buttons)
+            await send_func(card_text, parse_mode='html', attachments=[keyboard])
+            await send_func(
+                "🐾 Куда бежим дальше?",
+                attachments=[get_action_keyboard("случайный фильм", "random", extra_buttons)]
+            )
+        else:
+            await send_func("😢 Не могу показать карточку.")
 
     async def _handle_premiers(self, event: MessageCreated):
         user_id = event.message.sender.user_id
@@ -1173,7 +1178,7 @@ class MaxAdapter:
                     context['query'] = f'рекомендации агента: {query[:30]}...'
                     
                     keyboard = InlineKeyboardMarkup([
-                        [{"type": "callback", "text": "🎬 Показать карточки", "payload": "agent_show_cards"}]
+                        [{"type": "callback", "text": f"🎬 Показать {len(movies_list)} карточек", "payload": "agent_show_cards"}]
                     ])
                     await event.message.answer(
                         "👇 Хочешь посмотреть карточки этих фильмов?",
@@ -1337,6 +1342,16 @@ class MaxAdapter:
         movie_name = movie_details.get('name', 'Без названия')
         movie_year = movie_details.get('year', '')
 
+        # 1. Отправляем ссылку для красивого превью
+        kp_url = f"https://www.kinopoisk.ru/film/{movie_id}/"
+        await send_func(kp_url)
+
+        # 2. Отправляем полную карточку
+        card_text, _ = format_movie_card(movie_details)
+        if card_text:
+            await send_func(card_text, parse_mode="html")
+
+        # 3. Проверяем кэш
         cached = get_cached_opinion(movie_id)
         if cached:
             formatted_opinion = self._format_opinion(cached, movie_name, movie_year, movie_id)
@@ -1411,7 +1426,18 @@ class MaxAdapter:
         description = movie_details.get('description', 'Описание отсутствует')
         if description and len(description) > 800:
             description = description[:800] + '...'
-        prompt = f"""Ты — КиноИщейка, собака-девочка, кинокритик с отличным чутьем на хорошее кино. Ты смотришь фильмы и делишься своим мнением с юмором и энтузиазмом. Говори о себе в женском роде.
+
+        # ===== УСИЛЕННЫЙ ПРОМТ (БЕЗ ПРИВЕТСТВИЙ) =====
+        prompt = f"""Ты — КиноИщейка, собака-девочка, кинокритик.
+
+ВАЖНО: НАЧИНАЙ ОТВЕТ СРАЗУ С СОДЕРЖАТЕЛЬНОЙ ЧАСТИ!
+НЕ используй фразы:
+- "Гав, привет!"
+- "Я нарыла для тебя..."
+- "Я посмотрела фильм и вот что думаю"
+- Любые другие приветствия и вступления
+
+Просто напиши своё мнение о фильме с первой фразы.
 
 Информация о фильме:
 🎬 Название: {title} ({year})
@@ -1425,32 +1451,15 @@ class MaxAdapter:
 📝 Сюжет:
 {description}
 
-Требования к ответу:
-1. Объем: 10-12 предложений
-2. Без markdown-разметки
-3. Только обычный текст
-4. Разделяй части мнения переносами строк
-5. Добавь собачий юмор
-6. Говори о себе в женском роде
-7. НЕ используй вводные фразы типа "Я посмотрела фильм и вот что думаю" - сразу начинай с содержательной части
-
-Расскажи о:
-- Настроении и смысле фильма
-- Наградах (с учетом страны производства, если знаешь точно, а если нет - просто не упоминай, не выдумывай!)
-- Особенностях
-- Почему стоит посмотреть
-- Плюсах и минусах
-
-В конце обязательно добавь:
-Оценка: от 5 до 10 (краткий комментарий почему)
-
-После оценки добавь:
-Настроение: 5 хэштегов (например #Радость #Грусть)
-Атмосфера: 5 хэштегов (например #Мрачность #Яркость)"""
+Напиши мнение (10-12 предложений). В конце:
+Оценка: X/10 (комментарий)
+Настроение: #теги
+Атмосфера: #теги"""
+        
         response = ai_client.chat.completions.create(
             model="deepseek-chat",
             messages=[
-                {"role": "system", "content": "Ты — КиноИщейка, собака-девочка, кинокритик. Твои ответы должны быть дружелюбными, с юмором, но при этом информативными. Обязательно используй женский род: 'я посмотрела', 'мне понравилось', 'я нашла' и т.д."},
+                {"role": "system", "content": "Ты — КиноИщейка, собака-девочка, кинокритик. Отвечай по-русски, с юмором, но сразу по делу. Никаких приветствий и вступлений. Только мнение о фильме."},
                 {"role": "user", "content": prompt}
             ],
             timeout=60
