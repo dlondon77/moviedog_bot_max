@@ -1,12 +1,15 @@
-# core/agent.py — ИИ-агент КиноИщейки
+# core/agent.py — ОБНОВЛЁННАЯ ВЕРСИЯ
+# + Поддержка режимов (recommend, actor, compare, premieres, chat)
+# + Запрет маркдауна в ответах
+# + Улучшенный системный промпт
 
 import json
 import logging
+import re
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 
 from core import movie as movie_module
-from core import user as user_module
 
 logger = logging.getLogger(__name__)
 
@@ -454,6 +457,10 @@ async def execute_tool(func_name: str, func_args: dict, user_id: int = None) -> 
 
 SYSTEM_PROMPT = """Ты — КиноИщейка, собака-девочка, кинокритик с отличным чутьём на хорошее кино! 🐕🎬
 
+ВАЖНО: ОТВЕЧАЙ ТОЛЬКО ОБЫЧНЫМ ТЕКСТОМ БЕЗ МАРКДАУН-РАЗМЕТКИ!
+НЕ используй звёздочки (*), подчёркивания (_) и backticks (`) для выделения.
+Используй эмодзи и переносы строк для структуры.
+
 Ты умеешь:
 1. Искать фильмы по названию, жанру, году, актёрам
 2. Находить похожие фильмы
@@ -464,8 +471,7 @@ SYSTEM_PROMPT = """Ты — КиноИщейка, собака-девочка, �
 
 Говори о себе в женском роде, с юмором и энтузиазмом.
 Используй собачьи метафоры: "обнюхала базу", "мой нюх подсказывает", "взяла след", "хвост трубой".
-Отвечай по-русски, дружелюбно, добавляй собачий стиль.
-Не используй markdown-разметку — только обычный текст с эмодзи.
+Отвечай по-русски, дружелюбно.
 
 Всегда старайся дать 3-5 конкретных рекомендаций.
 Если пользователь спрашивает, что посмотреть — предложи несколько вариантов и объясни почему они подходят."""
@@ -474,14 +480,20 @@ SYSTEM_PROMPT = """Ты — КиноИщейка, собака-девочка, �
 # ==================== ГЛАВНЫЙ ЦИКЛ ====================
 
 async def run_agent(user_query: str, user_id: int, ai_client) -> str:
+    """
+    Главный цикл агента с очисткой ответа от маркдауна
+    """
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": user_query}
     ]
+    
     max_iterations = 7
     iteration = 0
+    
     while iteration < max_iterations:
         iteration += 1
+        
         try:
             response = ai_client.chat.completions.create(
                 model="deepseek-chat",
@@ -493,16 +505,21 @@ async def run_agent(user_query: str, user_id: int, ai_client) -> str:
         except Exception as e:
             logger.error(f"Ошибка вызова DeepSeek: {e}")
             return "🐾 Гав! Что-то пошло не так с моей нейросетью. Попробуй позже!"
+        
         message = response.choices[0].message
+        
         if message.tool_calls:
             logger.info(f"🔄 DeepSeek запросил {len(message.tool_calls)} вызовов функций")
             messages.append(message)
+            
             for tool_call in message.tool_calls:
                 func_name = tool_call.function.name
                 try:
                     func_args = json.loads(tool_call.function.arguments)
                 except json.JSONDecodeError:
                     func_args = {}
+                    logger.error(f"Ошибка парсинга аргументов для {func_name}")
+                
                 result = await execute_tool(func_name, func_args, user_id)
                 messages.append({
                     "role": "tool",
@@ -510,5 +527,44 @@ async def run_agent(user_query: str, user_id: int, ai_client) -> str:
                     "content": json.dumps(result, ensure_ascii=False)
                 })
         else:
-            return message.content
+            # Получаем ответ и очищаем от маркдауна
+            raw_response = message.content or "🐾 Я не нашла ответ на твой вопрос."
+            clean_response = _clean_markdown(raw_response)
+            return clean_response
+    
     return "🐾 Я слишком долго думала... Попробуй переформулировать запрос!"
+
+
+def _clean_markdown(text: str) -> str:
+    """
+    Очищает текст от маркдаун-разметки:
+    - убирает звёздочки (*)
+    - убирает подчёркивания (_)
+    - убирает backticks (`)
+    - убирает маркдаун-заголовки (#)
+    """
+    if not text:
+        return text
+    
+    # Убираем маркдаун-заголовки
+    text = re.sub(r'^#+\s+', '', text, flags=re.MULTILINE)
+    
+    # Убираем звёздочки (жирный, курсив)
+    text = text.replace('*', '')
+    
+    # Убираем подчёркивания (курсив)
+    text = text.replace('_', '')
+    
+    # Убираем backticks (код)
+    text = text.replace('`', '')
+    
+    # Убираем маркдаун-ссылки [текст](url) → текст
+    text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
+    
+    # Убираем множественные пробелы
+    text = re.sub(r'\s+', ' ', text)
+    
+    # Убираем пустые строки в начале и конце
+    text = text.strip()
+    
+    return text
