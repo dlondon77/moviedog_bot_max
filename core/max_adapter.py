@@ -42,6 +42,8 @@ search_movies_by_person_in_db = movie_module.search_movies_by_person_in_db
 get_premier_movies_from_db = movie_module.get_premier_movies_from_db
 search_movies_with_filters = movie_module.search_movies_with_filters
 
+# ==================== КОНСТАНТЫ ====================
+ADMIN_IDS = [7191208]  # пользователи с безлимитным доступом
 
 # ==================== КЭШ МНЕНИЙ ====================
 def get_cached_opinion(movie_id: int):
