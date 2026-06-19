@@ -1154,47 +1154,82 @@ class MaxAdapter:
         await self._process_opinion(event, user_id, str(movie_id), event.message.answer)
 
     async def _process_opinion(self, event, user_id, query, send_func):
-        limits = get_user_limits(user_id)
-        stats = get_user_stats(user_id, date.today().isoformat())
-        if stats['opinion_count'] >= limits['opinion_limit']:
-            await send_func(
-                f"🐾 Сегодня я уже высказала {stats['opinion_count']} мнений из {limits['opinion_limit']}.\n"
-                f"Лимит обновится завтра!"
-            )
-            return
+        """
+        Генерация мнения о фильме.
+        Для админов (7191208) — безлимит.
+        """
+        # ===== ПРОВЕРКА ЛИМИТОВ (только для обычных пользователей) =====
+        if user_id not in ADMIN_IDS:
+            limits = get_user_limits(user_id)
+            stats = get_user_stats(user_id, date.today().isoformat())
+            
+            if stats['opinion_count'] >= limits['opinion_limit']:
+                await send_func(
+                    f"🐾 Сегодня я уже высказала {stats['opinion_count']} мнений из {limits['opinion_limit']}.\n"
+                    f"Лимит обновится завтра!\n\n"
+                    f"💰 Хочешь больше? Оформи подписку от 199 ₽/мес"
+                )
+                return
+        else:
+            # Для админа — безлимит, просто логируем
+            logger.info(f"👑 Админ {user_id} запросил мнение (безлимит)")
+    
+        # ===== ПОИСК ФИЛЬМА =====
         movie_details = None
+        
+        # Пробуем как ID
         if query.isdigit():
             movie_details = get_movie_details(int(query))
+        
+        # Если не нашли — ищем по названию
         if not movie_details:
             movies = search_movies_in_db(query, min_rating=0.0, max_rating=10.0)
             if movies:
                 movie_details = get_movie_details(movies[0]['id'])
+        
         if not movie_details:
             await send_func(f"😢 Не нашла фильм '{query}'. Проверь название или ID.")
             return
+    
         movie_id = movie_details['id']
         movie_name = movie_details.get('name', 'Без названия')
         movie_year = movie_details.get('year', '')
+    
+        # ===== ОТПРАВЛЯЕМ ССЫЛКУ ДЛЯ КРАСИВОГО ПРЕВЬЮ =====
         kp_url = f"https://www.kinopoisk.ru/film/{movie_id}/"
         await send_func(kp_url)
+    
+        # ===== ПРОВЕРЯЕМ КЭШ =====
         cached = get_cached_opinion(movie_id)
         if cached:
             formatted_opinion = self._format_opinion(cached, movie_name, movie_year)
             await send_func(formatted_opinion, parse_mode="html")
-            increment_stat_counter(user_id, 'opinion_count')
+            
+            # Увеличиваем счётчик только для обычных пользователей
+            if user_id not in ADMIN_IDS:
+                increment_stat_counter(user_id, 'opinion_count')
             record_user_opinion(user_id, movie_id)
+            
             await send_func("🏠", attachments=[get_action_keyboard(None, None, None)])
             return
+    
+        # ===== ГЕНЕРАЦИЯ НОВОГО МНЕНИЯ =====
         await send_func(f"🐾 Смотрю <b>{movie_name}</b> ({movie_year}) в ускоренном режиме... 🎬", parse_mode="html")
+    
         if not ai_client:
-            await send_func("😢 Генерация мнений временно недоступна.")
+            await send_func("😢 Генерация мнений временно недоступна. Попробуй позже.")
             return
+    
         try:
             opinion = await self._generate_opinion(movie_details)
             if opinion:
                 save_opinion_cache(movie_id, opinion)
-                increment_stat_counter(user_id, 'opinion_count')
+                
+                # Увеличиваем счётчик только для обычных пользователей
+                if user_id not in ADMIN_IDS:
+                    increment_stat_counter(user_id, 'opinion_count')
                 record_user_opinion(user_id, movie_id)
+                
                 formatted_opinion = self._format_opinion(opinion, movie_name, movie_year)
                 await send_func(formatted_opinion, parse_mode="html")
                 await send_func("🏠", attachments=[get_action_keyboard(None, None, None)])
