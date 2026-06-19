@@ -1040,19 +1040,20 @@ class MaxAdapter:
             await send_func("😢 Не могу найти информацию о фильме.")
             return
         
+        movie_id = movie_details.get('id')
+        
         card_text, _ = format_movie_card(movie_details)
         if card_text:
-            await send_func(card_text, parse_mode='html')
-            
             buttons = [
+                [{"type": "callback", "text": "🐾 Мнение о фильме", "payload": f"opinion_{movie_id}_random"}],
                 [{"type": "callback", "text": "🎲 Ещё случайный", "payload": "random"}],
                 [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
             ]
             keyboard = InlineKeyboardMarkup(buttons)
-            await send_func("🐾 Куда бежим дальше?", attachments=[keyboard])
+            await send_func(card_text, parse_mode='html', attachments=[keyboard])
         else:
             await send_func("😢 Не могу показать карточку.")
-
+        
     async def _handle_premiers(self, event: MessageCreated):
         user_id = event.message.sender.user_id
         await event.message.answer("🎉 Ищу ожидаемые премьеры...")
