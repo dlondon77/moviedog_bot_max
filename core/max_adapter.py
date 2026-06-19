@@ -1,9 +1,5 @@
-# core/max_adapter.py — ПОЛНАЯ ВЕРСИЯ С АГЕНТОМ
-# + ИИ-агент с Function Calling
-# + Сравнение фильмов
-# + Премьеры по месяцам
-# + Рекомендации на основе предпочтений
-# + Любимые фильмы
+# core/max_adapter.py — ТОЛЬКО АДАПТЕР
+# Вся логика агента вынесена в core/agent.py
 
 import logging
 import configparser
@@ -30,7 +26,7 @@ import httpx
 import user as user_module
 import movie as movie_module
 import db as db_module
-from core.agent import run_agent
+from core.agent import run_agent  # ← агент импортируется как библиотека
 
 register_user = user_module.register_user
 get_user_limits = user_module.get_user_limits
@@ -302,7 +298,7 @@ class MaxAdapter:
         self.user_context = {}
 
         self._register_handlers()
-        logger.info("✅ MaxAdapter инициализирован (с агентом)")
+        logger.info("✅ MaxAdapter инициализирован")
 
     def _register_handlers(self):
         @self.dp.bot_started()
@@ -984,7 +980,7 @@ class MaxAdapter:
             parse_mode="html"
         )
 
-    # ==================== ОБРАБОТЧИК СООБЩЕНИЙ (С АГЕНТОМ) ====================
+    # ==================== ОБРАБОТЧИК СООБЩЕНИЙ ====================
     async def _handle_message(self, event: MessageCreated):
         user_id = event.message.sender.user_id
         text = event.message.body.text if event.message.body else ""
@@ -1284,7 +1280,7 @@ class MaxAdapter:
 
     # ==================== ЗАПУСК ====================
     async def run(self):
-        logger.info("🚀 MaxAdapter запущен (с агентом)")
+        logger.info("🚀 MaxAdapter запущен")
         await self.bot.delete_webhook()
         await self.dp.start_polling(self.bot)
 
