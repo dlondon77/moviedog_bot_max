@@ -1,11 +1,8 @@
 # core/max_adapter.py — ИТОГОВАЯ ВЕРСИЯ
-# + Полная карточка + ссылка для превью внизу
-# + "Куда бежим дальше?" — отдельное сообщение с кнопками
-# + Кнопка "В главное меню" в пагинации
-# + "Показать карточки" для всех подборок агента
-# + Промт для мнения как в TG/VK (5 хэштегов)
-# + Фразы в стиле КиноИщейки
-# + Название агента — "КиноИИскать"
+# + Случайный фильм: карточка + "Куда бежим дальше?" (Ещё случайный + В меню)
+# + Мнение: статус → мнение со ссылкой в названии (без карточки)
+# + Кнопки после мнения в зависимости от источника
+# + Пагинация с кнопкой "В главное меню"
 
 import logging
 import configparser
@@ -171,9 +168,10 @@ def get_agent_menu():
     ]
     return InlineKeyboardMarkup(buttons)
 
-def get_opinion_button(movie_id: int):
+def get_opinion_button(movie_id: int, source: str = "search"):
+    """Кнопка мнения с указанием источника"""
     buttons = [
-        [{"type": "callback", "text": "🐾 Мнение о фильме", "payload": f"opinion_{movie_id}"}]
+        [{"type": "callback", "text": "🐾 Мнение о фильме", "payload": f"opinion_{movie_id}_{source}"}]
     ]
     return InlineKeyboardMarkup(buttons)
 
@@ -663,6 +661,14 @@ class MaxAdapter:
             return
 
         # ===== ОСНОВНЫЕ КОМАНДЫ =====
+        # ===== МНЕНИЕ (с источником) =====
+        if payload.startswith("opinion_"):
+            parts = payload.split("_")
+            movie_id = int(parts[1])
+            source = parts[2] if len(parts) > 2 else "search"
+            await self._send_opinion_by_id(event, user_id, movie_id, source)
+            return
+
         if payload == "random":
             await event.message.answer("🎲 Ищу случайный фильм...")
             await self._send_random_result(event.message.answer)
@@ -677,9 +683,6 @@ class MaxAdapter:
             await event.message.answer("🎭 Введи имя актёра или режиссёра:")
         elif payload == "profile":
             await self._send_profile(event.message.answer, user_id)
-        elif payload.startswith("opinion_"):
-            movie_id = int(payload.split("_")[1])
-            await self._send_opinion_by_id(event, user_id, movie_id)
         else:
             await event.message.answer(f"🐾 Хм... Я не поняла, что ты хочешь. Давай начнём сначала — выбери кнопку в меню!")
 
@@ -917,7 +920,7 @@ class MaxAdapter:
                     await event.message.answer(
                         card_text,
                         parse_mode='html',
-                        attachments=[get_opinion_button(movie_details['id'])]
+                        attachments=[get_opinion_button(movie_details['id'], "search")]
                     )
         if total_pages > 1:
             pagination = get_pagination_buttons(page, total_pages, "search", current_query)
@@ -928,7 +931,7 @@ class MaxAdapter:
         else:
             await event.message.answer(
                 "🐾 Куда бежим дальше?",
-                attachments=[get_action_keyboard(None, None, None)]
+                attachments=[get_action_keyboard("поиск", "search")]
             )
 
     async def _show_premiers_page(self, event, user_id, page):
@@ -960,7 +963,7 @@ class MaxAdapter:
                     await event.message.answer(
                         card_text,
                         parse_mode='html',
-                        attachments=[get_opinion_button(movie_details['id'])]
+                        attachments=[get_opinion_button(movie_details['id'], "premiers")]
                     )
         if total_pages > 1:
             pagination = get_pagination_buttons(page, total_pages, "premiers", "")
@@ -971,7 +974,7 @@ class MaxAdapter:
         else:
             await event.message.answer(
                 "🐾 Куда бежим дальше?",
-                attachments=[get_action_keyboard(None, None, None)]
+                attachments=[get_action_keyboard("премьеры", "premiers")]
             )
 
     async def _show_person_search_page(self, event, user_id, page, query):
@@ -1003,7 +1006,7 @@ class MaxAdapter:
                     await event.message.answer(
                         card_text,
                         parse_mode='html',
-                        attachments=[get_opinion_button(movie_details['id'])]
+                        attachments=[get_opinion_button(movie_details['id'], "person")]
                     )
         if total_pages > 1:
             pagination = get_pagination_buttons(page, total_pages, "search", query)
@@ -1014,7 +1017,7 @@ class MaxAdapter:
         else:
             await event.message.answer(
                 "🐾 Куда бежим дальше?",
-                attachments=[get_action_keyboard(None, None, None)]
+                attachments=[get_action_keyboard("поиск по персонам", "person")]
             )
 
     # ==================== ОБРАБОТЧИКИ КОМАНД ====================
@@ -1032,26 +1035,18 @@ class MaxAdapter:
             await send_func("😢 Не могу найти информацию о фильме.")
             return
         
-        movie_id = movie_details.get('id')
-        
-        # 1. Полная карточка + ссылка на Кинопоиск (для превью)
+        # 1. Карточка (без ссылки)
         card_text, _ = format_movie_card(movie_details)
         if card_text:
-            # Добавляем ссылку в конец карточки
-            kp_url = f"https://www.kinopoisk.ru/film/{movie_id}/"
-            card_text += f"\n\n🔗 <a href='{kp_url}'>Кинопоиск</a>"
+            await send_func(card_text, parse_mode='html')
             
-            extra_buttons = [[
-                {"type": "callback", "text": "🐾 Мнение о фильме", "payload": f"opinion_{movie_id}"}
-            ]]
-            keyboard = get_action_keyboard("случайный фильм", "random", extra_buttons)
-            await send_func(card_text, parse_mode='html', attachments=[keyboard])
-            
-            # 2. Отдельное сообщение "Куда бежим дальше?"
-            await send_func(
-                "🐾 Куда бежим дальше?",
-                attachments=[get_action_keyboard("случайный фильм", "random", extra_buttons)]
-            )
+            # 2. "Куда бежим дальше?" — только для случайного фильма
+            buttons = [
+                [{"type": "callback", "text": "🎲 Ещё случайный", "payload": "random"}],
+                [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
+            ]
+            keyboard = InlineKeyboardMarkup(buttons)
+            await send_func("🐾 Куда бежим дальше?", attachments=[keyboard])
         else:
             await send_func("😢 Не могу показать карточку.")
 
@@ -1316,12 +1311,12 @@ class MaxAdapter:
                 "• /opinion Зеленая миля — по названию"
             )
             return
-        await self._process_opinion(event, user_id, text, event.message.answer)
+        await self._process_opinion(event, user_id, text, event.message.answer, "search")
 
-    async def _send_opinion_by_id(self, event, user_id, movie_id):
-        await self._process_opinion(event, user_id, str(movie_id), event.message.answer)
+    async def _send_opinion_by_id(self, event, user_id, movie_id, source="search"):
+        await self._process_opinion(event, user_id, str(movie_id), event.message.answer, source)
 
-    async def _process_opinion(self, event, user_id, query, send_func):
+    async def _process_opinion(self, event, user_id, query, send_func, source="search"):
         if user_id not in ADMIN_IDS:
             limits = get_user_limits(user_id)
             stats = get_user_stats(user_id, date.today().isoformat())
@@ -1349,33 +1344,24 @@ class MaxAdapter:
         movie_name = movie_details.get('name', 'Без названия')
         movie_year = movie_details.get('year', '')
 
-        # 1. Полная карточка + ссылка на Кинопоиск (для превью)
-        card_text, _ = format_movie_card(movie_details)
-        if card_text:
-            kp_url = f"https://www.kinopoisk.ru/film/{movie_id}/"
-            card_text += f"\n\n🔗 <a href='{kp_url}'>Кинопоиск</a>"
-            await send_func(card_text, parse_mode="html")
+        # 1. Статус генерации (без карточки!)
+        await send_func("🎬 Нюхнула, что это за фильм! Смотрю его в ускоренном режиме...")
 
-        # 2. Проверяем кэш и генерируем мнение
+        # 2. Проверяем кэш
         cached = get_cached_opinion(movie_id)
         if cached:
+            # 3. Мнение со ссылкой в названии
             formatted_opinion = self._format_opinion(cached, movie_name, movie_year, movie_id)
             await send_func(formatted_opinion, parse_mode="html")
             if user_id not in ADMIN_IDS:
                 increment_stat_counter(user_id, 'opinion_count')
             record_user_opinion(user_id, movie_id)
-            await send_func(
-                "🐾 Куда бежим дальше?",
-                attachments=[get_action_keyboard(None, None, None)]
-            )
+            
+            # 4. "Куда бежим дальше?" с кнопками в зависимости от источника
+            await self._send_opinion_buttons(send_func, source, movie_id)
             return
 
-        await send_func("🎬 Нюхнула, что это за фильм! Смотрю его в ускоренном режиме...", parse_mode="html")
-
-        if not ai_client:
-            await send_func("😢 Генерация мнений временно недоступна.")
-            return
-
+        # ... генерация мнения ...
         try:
             opinion = await self._generate_opinion(movie_details)
             if opinion:
@@ -1385,20 +1371,47 @@ class MaxAdapter:
                 record_user_opinion(user_id, movie_id)
                 formatted_opinion = self._format_opinion(opinion, movie_name, movie_year, movie_id)
                 await send_func(formatted_opinion, parse_mode="html")
-                await send_func(
-                    "🐾 Куда бежим дальше?",
-                    attachments=[get_action_keyboard(None, None, None)]
-                )
+                await self._send_opinion_buttons(send_func, source, movie_id)
             else:
                 await send_func("😢 Не удалось сгенерировать мнение.")
         except Exception as e:
             logger.error(f"Ошибка генерации: {e}")
             await send_func("🐾 Гав! Я запуталась в проводах. Попробуй позже, а я пока перезагружу нюх!")
 
+    async def _send_opinion_buttons(self, send_func, source, movie_id):
+        """Отправляет кнопки после мнения в зависимости от источника"""
+        if source == "random":
+            buttons = [
+                [{"type": "callback", "text": "🎲 Ещё случайный", "payload": "random"}],
+                [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
+            ]
+        elif source == "search":
+            buttons = [
+                [{"type": "callback", "text": "🔄 Ещё поиск", "payload": "search"}],
+                [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
+            ]
+        elif source == "person":
+            buttons = [
+                [{"type": "callback", "text": "🔄 Ещё поиск по персонам", "payload": "person"}],
+                [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
+            ]
+        elif source == "premiers":
+            buttons = [
+                [{"type": "callback", "text": "🔄 Ещё премьеры", "payload": "premiers"}],
+                [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
+            ]
+        else:
+            buttons = [
+                [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
+            ]
+        
+        keyboard = InlineKeyboardMarkup(buttons)
+        await send_func("🐾 Куда бежим дальше?", attachments=[keyboard])
+
     def _format_opinion(self, opinion, movie_name, movie_year, movie_id):
         kp_url = f"https://www.kinopoisk.ru/film/{movie_id}/"
         title_with_link = f"<a href='{kp_url}'><b>{movie_name}</b></a> ({movie_year})"
-        return f"🐾 Я посмотрела {title_with_link}, и вот что думаю:\n\n{opinion}\n\n🐾"
+        return f"Я посмотрела {title_with_link}, и вот что думаю:\n\n{opinion}\n\n🐾"
 
     async def _generate_opinion(self, movie_details):
         title = movie_details.get('name', 'Без названия')
