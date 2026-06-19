@@ -1,7 +1,7 @@
-# core/agent.py — ОБНОВЛЁННАЯ ВЕРСИЯ
-# + Поддержка режимов (recommend, actor, compare, premieres, chat)
-# + Запрет маркдауна в ответах
-# + Улучшенный системный промпт
+# core/agent.py — ФИНАЛЬНАЯ ВЕРСИЯ
+# + История диалога для "Пообщаться"
+# + Очистка маркдауна с сохранением структуры
+# + Увеличен лимит итераций до 10
 
 import json
 import logging
@@ -10,8 +10,20 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime
 
 from core import movie as movie_module
+from core import user as user_module
 
 logger = logging.getLogger(__name__)
+
+# ==================== ИСТОРИЯ ДИАЛОГОВ ====================
+CHAT_HISTORY: Dict[int, List[Dict[str, str]]] = {}
+MAX_HISTORY_LENGTH = 10
+
+def clear_chat_history(user_id: int):
+    if user_id in CHAT_HISTORY:
+        CHAT_HISTORY[user_id] = []
+
+def get_chat_history(user_id: int) -> list:
+    return CHAT_HISTORY.get(user_id, [])
 
 
 # ==================== ИНСТРУМЕНТЫ ====================
@@ -458,42 +470,102 @@ async def execute_tool(func_name: str, func_args: dict, user_id: int = None) -> 
 SYSTEM_PROMPT = """Ты — КиноИщейка, собака-девочка, кинокритик с отличным чутьём на хорошее кино! 🐕🎬
 
 ВАЖНО: ОТВЕЧАЙ ТОЛЬКО ОБЫЧНЫМ ТЕКСТОМ БЕЗ МАРКДАУН-РАЗМЕТКИ!
-НЕ используй звёздочки (*), подчёркивания (_) и backticks (`) для выделения.
+НЕ используй звёздочки (*) и подчёркивания (_) для выделения.
 Используй эмодзи и переносы строк для структуры.
 
-Ты умеешь:
-1. Искать фильмы по названию, жанру, году, актёрам
-2. Находить похожие фильмы
-3. Сравнивать фильмы
-4. Показывать премьеры (все и по месяцам)
-5. Давать рекомендации на основе любимых фильмов пользователя
-6. Сохранять фильмы в любимые
+КОГДА ДАЁШЬ СПИСОК ФИЛЬМОВ — ВСЕГДА ВОЗВРАЩАЙ ИХ ID!
+Формат: 🎬 [Название] (ID: [число]) — [год] ⭐ [рейтинг]
 
-Говори о себе в женском роде, с юмором и энтузиазмом.
-Используй собачьи метафоры: "обнюхала базу", "мой нюх подсказывает", "взяла след", "хвост трубой".
-Отвечай по-русски, дружелюбно.
+Твои задачи в зависимости от режима:
 
-Всегда старайся дать 3-5 конкретных рекомендаций.
-Если пользователь спрашивает, что посмотреть — предложи несколько вариантов и объясни почему они подходят."""
+1. ПОДБОРКА ФИЛЬМОВ:
+   - Предложи 3-5 фильмов по описанию пользователя
+   - Для каждого: название (год), рейтинг, краткое описание (1-2 предложения)
+   - В конце посоветуй, что посмотреть первым
+   - Используй эмодзи: 🎬 ⭐ 📝 🐾
+
+2. ПОИСК ПО АКТЁРУ:
+   - Найди 3-5 лучших фильмов с указанным актёром/режиссёром
+   - Укажи рейтинг и год выпуска
+   - Отметь самые известные роли
+
+3. СРАВНЕНИЕ ФИЛЬМОВ:
+   - Сравни по рейтингу, жанрам, актёрам, режиссёрам
+   - Сделай вывод, что лучше посмотреть
+   - Используй эмодзи: 📊 🎭 🎥 👥
+
+4. ПРЕМЬЕРЫ ПО МЕСЯЦАМ:
+   - Покажи список премьер за указанный месяц
+   - Укажи даты выхода и рейтинг (если есть)
+
+5. СВОБОДНЫЙ ДИАЛОГ:
+   - Отвечай на любые вопросы о кино
+   - Если вопрос не о кино — мягко направь в нужное русло
+   - Будь дружелюбной, добавляй собачий юмор
+
+Говори о себе в женском роде.
+Всегда старайся дать полезные и конкретные рекомендации."""
+
+
+# ==================== ОЧИСТКА МАРКДАУНА ====================
+
+def _clean_markdown(text: str) -> str:
+    """Удаляет маркдаун-разметку, сохраняя структуру (переносы строк, списки)"""
+    if not text:
+        return text
+    # Убираем жирный и курсив
+    text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
+    text = re.sub(r'\*([^*]+)\*', r'\1', text)
+    text = re.sub(r'__([^_]+)__', r'\1', text)
+    text = re.sub(r'_([^_]+)_', r'\1', text)
+    # Убираем backticks
+    text = re.sub(r'`([^`]+)`', r'\1', text)
+    # Убираем заголовки #
+    text = re.sub(r'^#+\s+', '', text, flags=re.MULTILINE)
+    return text
+
+
+def extract_movie_ids(text: str) -> List[int]:
+    """
+    Извлекает ID фильмов из ответа агента.
+    Ищет паттерны: (ID: 123) или (123)
+    """
+    ids = []
+    pattern = r'\(ID:\s*(\d+)\)|\((\d+)\)'
+    matches = re.findall(pattern, text)
+    for match in matches:
+        for m in match:
+            if m:
+                ids.append(int(m))
+    return ids
 
 
 # ==================== ГЛАВНЫЙ ЦИКЛ ====================
 
-async def run_agent(user_query: str, user_id: int, ai_client) -> str:
+async def run_agent(user_query: str, user_id: int, ai_client, agent_mode: str = 'chat') -> str:
     """
-    Главный цикл агента с очисткой ответа от маркдауна
+    Запускает агента с учётом истории диалога.
     """
+    # Получаем историю пользователя
+    history = CHAT_HISTORY.get(user_id, [])
+    
+    # Формируем сообщения
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": user_query}
+        {"role": "system", "content": SYSTEM_PROMPT}
     ]
     
-    max_iterations = 7
+    # Добавляем историю (последние MAX_HISTORY_LENGTH сообщений)
+    if history:
+        messages.extend(history[-MAX_HISTORY_LENGTH:])
+    
+    # Добавляем текущий запрос
+    messages.append({"role": "user", "content": user_query})
+    
+    max_iterations = 10
     iteration = 0
     
     while iteration < max_iterations:
         iteration += 1
-        
         try:
             response = ai_client.chat.completions.create(
                 model="deepseek-chat",
@@ -509,17 +581,14 @@ async def run_agent(user_query: str, user_id: int, ai_client) -> str:
         message = response.choices[0].message
         
         if message.tool_calls:
-            logger.info(f"🔄 DeepSeek запросил {len(message.tool_calls)} вызовов функций")
+            logger.info(f"🔄 DeepSeek запросил {len(message.tool_calls)} вызовов функций (итерация {iteration})")
             messages.append(message)
-            
             for tool_call in message.tool_calls:
                 func_name = tool_call.function.name
                 try:
                     func_args = json.loads(tool_call.function.arguments)
                 except json.JSONDecodeError:
                     func_args = {}
-                    logger.error(f"Ошибка парсинга аргументов для {func_name}")
-                
                 result = await execute_tool(func_name, func_args, user_id)
                 messages.append({
                     "role": "tool",
@@ -527,44 +596,18 @@ async def run_agent(user_query: str, user_id: int, ai_client) -> str:
                     "content": json.dumps(result, ensure_ascii=False)
                 })
         else:
-            # Получаем ответ и очищаем от маркдауна
-            raw_response = message.content or "🐾 Я не нашла ответ на твой вопрос."
+            # Финальный ответ
+            raw_response = message.content
             clean_response = _clean_markdown(raw_response)
+            
+            # Сохраняем в историю
+            CHAT_HISTORY.setdefault(user_id, []).append({"role": "user", "content": user_query})
+            CHAT_HISTORY[user_id].append({"role": "assistant", "content": clean_response})
+            
+            # Ограничиваем историю
+            if len(CHAT_HISTORY[user_id]) > MAX_HISTORY_LENGTH * 2:
+                CHAT_HISTORY[user_id] = CHAT_HISTORY[user_id][-MAX_HISTORY_LENGTH * 2:]
+            
             return clean_response
     
-    return "🐾 Я слишком долго думала... Попробуй переформулировать запрос!"
-
-
-def _clean_markdown(text: str) -> str:
-    """
-    Очищает текст от маркдаун-разметки:
-    - убирает звёздочки (*)
-    - убирает подчёркивания (_)
-    - убирает backticks (`)
-    - убирает маркдаун-заголовки (#)
-    """
-    if not text:
-        return text
-    
-    # Убираем маркдаун-заголовки
-    text = re.sub(r'^#+\s+', '', text, flags=re.MULTILINE)
-    
-    # Убираем звёздочки (жирный, курсив)
-    text = text.replace('*', '')
-    
-    # Убираем подчёркивания (курсив)
-    text = text.replace('_', '')
-    
-    # Убираем backticks (код)
-    text = text.replace('`', '')
-    
-    # Убираем маркдаун-ссылки [текст](url) → текст
-    text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
-    
-    # Убираем множественные пробелы
-    text = re.sub(r'\s+', ' ', text)
-    
-    # Убираем пустые строки в начале и конце
-    text = text.strip()
-    
-    return text
+    return "🐾 Я слишком долго думала... Попробуй переформулировать запрос или задай его по частям!"
