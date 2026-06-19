@@ -1,8 +1,11 @@
-# core/max_adapter.py — ИСПРАВЛЕННАЯ ВЕРСИЯ
-# + Мнение: полная карточка + ссылка (предпросмотр)
+# core/max_adapter.py — ИТОГОВАЯ ВЕРСИЯ
+# + Полная карточка + ссылка для превью внизу
+# + "Куда бежим дальше?" — отдельное сообщение с кнопками
 # + Кнопка "В главное меню" в пагинации
 # + "Показать карточки" для всех подборок агента
-# + Усилен промт (без приветствий)
+# + Промт для мнения как в TG/VK (5 хэштегов)
+# + Фразы в стиле КиноИщейки
+# + Название агента — "КиноИИскать"
 
 import logging
 import configparser
@@ -139,7 +142,7 @@ def get_main_menu():
             {"type": "callback", "text": "🎭 Поиск по персонам", "payload": "person"}
         ],
         [
-            {"type": "callback", "text": "🤖 ИИ-агент", "payload": "agent_menu"},
+            {"type": "callback", "text": "🤖 КиноИИскать", "payload": "agent_menu"},
             {"type": "callback", "text": "💬 Пообщаться", "payload": "chat"}
         ],
         [
@@ -183,7 +186,6 @@ def get_pagination_buttons(current_page: int, total_pages: int, prefix: str, que
     if current_page < total_pages - 1:
         row.append({"type": "callback", "text": "Вперёд ▶️", "payload": f"{prefix}_page_{current_page+1}_{query}"})
     buttons.append(row)
-    # 👇 Кнопка "В главное меню"
     buttons.append([
         {"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}
     ])
@@ -326,7 +328,7 @@ class MaxAdapter:
         self.user_context = {}
 
         self._register_handlers()
-        logger.info("✅ MaxAdapter инициализирован (исправленная версия)")
+        logger.info("✅ MaxAdapter инициализирован (итоговая версия)")
 
     def _register_handlers(self):
         @self.dp.bot_started()
@@ -473,7 +475,7 @@ class MaxAdapter:
             "🎉 <b>Премьеры</b> — учуяю свежие ожидаемые премьеры\n"
             "🎭 <b>Поиск по персонам</b> — найду фильмы по имени актёра или режиссёра\n"
             "🐾 <b>Мнение о фильме</b> — расскажу о смысле фильма, его настроении и атмосфере\n"
-            "🤖 <b>ИИ-агент</b> — выбери сценарий: подборка, сравнение, премьеры\n"
+            "🤖 <b>КиноИИскать</b> — выбери сценарий: подборка, сравнение, премьеры\n"
             "💬 <b>Пообщаться</b> — задай любой вопрос о кино (я запоминаю диалог!)\n"
             "❓ <b>FAQ</b> — ответы на частые вопросы\n"
             "📝 <b>Обратная связь</b> — сообщить об ошибке или оставить отзыв\n\n"
@@ -500,10 +502,11 @@ class MaxAdapter:
             except AttributeError:
                 pass
 
-        # ===== МЕНЮ АГЕНТА =====
+        # ===== МЕНЮ КиноИИскать =====
         if payload == "agent_menu":
             await event.message.answer(
-                "🐾 Привет! Это мой умный нюх — я умею не просто искать, а думать и советовать.\n\n"
+                "🐾 Привет! Это мой умный нюх — <b>КиноИИскать</b>.\n"
+                "Я умею не просто искать, а думать и советовать.\n\n"
                 "Выбери, что я для тебя сделаю:\n\n"
                 "🎬 Подобрать фильм — расскажи, что хочешь посмотреть, я подберу лучшее\n"
                 "🎭 Поиск по персонам — найду фильмы с твоим любимым актёром или режиссёром\n"
@@ -514,7 +517,7 @@ class MaxAdapter:
             )
             return
 
-        # ===== СЦЕНАРИИ АГЕНТА =====
+        # ===== СЦЕНАРИИ КиноИИскать =====
         if payload == "agent_recommend":
             self._get_user_context(user_id)['agent_mode'] = 'recommend'
             self._get_user_context(user_id)['state'] = 'awaiting_agent'
@@ -1029,18 +1032,22 @@ class MaxAdapter:
             await send_func("😢 Не могу найти информацию о фильме.")
             return
         
-        # 1. Отправляем ссылку для красивого превью
-        kp_url = f"https://www.kinopoisk.ru/film/{movie_details['id']}/"
-        await send_func(kp_url)
+        movie_id = movie_details.get('id')
         
-        # 2. Отправляем карточку с кнопкой
+        # 1. Полная карточка + ссылка на Кинопоиск (для превью)
         card_text, _ = format_movie_card(movie_details)
         if card_text:
+            # Добавляем ссылку в конец карточки
+            kp_url = f"https://www.kinopoisk.ru/film/{movie_id}/"
+            card_text += f"\n\n🔗 <a href='{kp_url}'>Кинопоиск</a>"
+            
             extra_buttons = [[
-                {"type": "callback", "text": "🐾 Мнение о фильме", "payload": f"opinion_{movie_details['id']}"}
+                {"type": "callback", "text": "🐾 Мнение о фильме", "payload": f"opinion_{movie_id}"}
             ]]
             keyboard = get_action_keyboard("случайный фильм", "random", extra_buttons)
             await send_func(card_text, parse_mode='html', attachments=[keyboard])
+            
+            # 2. Отдельное сообщение "Куда бежим дальше?"
             await send_func(
                 "🐾 Куда бежим дальше?",
                 attachments=[get_action_keyboard("случайный фильм", "random", extra_buttons)]
@@ -1119,7 +1126,7 @@ class MaxAdapter:
         else:
             await self._perform_search(event, user_id, text)
 
-    # ===== АГЕНТ =====
+    # ===== КиноИИскать =====
     async def _handle_agent(self, event: MessageCreated, user_id: int, query: str):
         context = self._get_user_context(user_id)
         agent_mode = context.get('agent_mode', 'chat')
@@ -1130,7 +1137,7 @@ class MaxAdapter:
             if stats.get('opinion_count', 0) >= limits.get('opinion_limit', 5):
                 await event.message.answer(
                     f"🐾 Сегодня у тебя уже использовано {stats['opinion_count']} мнений.\n"
-                    f"Агент — платная фишка!\n\n"
+                    f"КиноИИскать — платная фишка!\n\n"
                     f"💰 Оформи подписку для безлимита!"
                 )
                 return
@@ -1146,7 +1153,7 @@ class MaxAdapter:
         else:
             enhanced_query = query
 
-        await event.message.answer("🤖 Думаю... (это может занять 10-15 секунд)")
+        await event.message.answer("🐕‍🦺 Взяла след! Бегу по запаху, это займёт пару минут...")
 
         if not ai_client:
             await event.message.answer("😢 Генерация временно недоступна.")
@@ -1342,16 +1349,14 @@ class MaxAdapter:
         movie_name = movie_details.get('name', 'Без названия')
         movie_year = movie_details.get('year', '')
 
-        # 1. Отправляем ссылку для красивого превью
-        kp_url = f"https://www.kinopoisk.ru/film/{movie_id}/"
-        await send_func(kp_url)
-
-        # 2. Отправляем полную карточку
+        # 1. Полная карточка + ссылка на Кинопоиск (для превью)
         card_text, _ = format_movie_card(movie_details)
         if card_text:
+            kp_url = f"https://www.kinopoisk.ru/film/{movie_id}/"
+            card_text += f"\n\n🔗 <a href='{kp_url}'>Кинопоиск</a>"
             await send_func(card_text, parse_mode="html")
 
-        # 3. Проверяем кэш
+        # 2. Проверяем кэш и генерируем мнение
         cached = get_cached_opinion(movie_id)
         if cached:
             formatted_opinion = self._format_opinion(cached, movie_name, movie_year, movie_id)
@@ -1365,7 +1370,7 @@ class MaxAdapter:
             )
             return
 
-        await send_func(f"🎬 Нюхнула, что это за фильм! Сейчас смотрю его в ускоренном режиме...", parse_mode="html")
+        await send_func("🎬 Нюхнула, что это за фильм! Смотрю его в ускоренном режиме...", parse_mode="html")
 
         if not ai_client:
             await send_func("😢 Генерация мнений временно недоступна.")
@@ -1398,10 +1403,13 @@ class MaxAdapter:
     async def _generate_opinion(self, movie_details):
         title = movie_details.get('name', 'Без названия')
         year = movie_details.get('year', '')
+        
         countries = movie_details.get('countries', [])
         countries_str = ', '.join(countries) if countries else 'неизвестно'
+        
         genres = movie_details.get('genres', [])
         genres_str = ', '.join(genres) if genres else 'неизвестно'
+        
         directors_list = movie_details.get('directors', [])
         if directors_list:
             director_names = []
@@ -1412,6 +1420,7 @@ class MaxAdapter:
             directors_str = ', '.join(director_names)
         else:
             directors_str = 'неизвестен'
+        
         actors_list = movie_details.get('actors', [])[:7]
         if actors_list:
             actor_names = []
@@ -1422,22 +1431,14 @@ class MaxAdapter:
             actors_str = '\n'.join([f"• {name}" for name in actor_names])
         else:
             actors_str = 'не указаны'
+        
         rating = movie_details.get('rating', 0)
         description = movie_details.get('description', 'Описание отсутствует')
         if description and len(description) > 800:
             description = description[:800] + '...'
 
-        # ===== УСИЛЕННЫЙ ПРОМТ (БЕЗ ПРИВЕТСТВИЙ) =====
-        prompt = f"""Ты — КиноИщейка, собака-девочка, кинокритик.
-
-ВАЖНО: НАЧИНАЙ ОТВЕТ СРАЗУ С СОДЕРЖАТЕЛЬНОЙ ЧАСТИ!
-НЕ используй фразы:
-- "Гав, привет!"
-- "Я нарыла для тебя..."
-- "Я посмотрела фильм и вот что думаю"
-- Любые другие приветствия и вступления
-
-Просто напиши своё мнение о фильме с первой фразы.
+        # ===== ПРОВЕРЕННЫЙ ПРОМТ ИЗ TG/VK =====
+        prompt = f"""Ты — КиноИщейка, собака-девочка, кинокритик с отличным чутьем на хорошее кино. Ты смотришь фильмы и делишься своим мнением с юмором и энтузиазмом. Говори о себе в женском роде.
 
 Информация о фильме:
 🎬 Название: {title} ({year})
@@ -1451,25 +1452,65 @@ class MaxAdapter:
 📝 Сюжет:
 {description}
 
-Напиши мнение (10-12 предложений). В конце:
-Оценка: X/10 (комментарий)
-Настроение: #теги
-Атмосфера: #теги"""
-        
+Требования к ответу:
+1. Объем: 10-12 предложений
+2. Без markdown-разметки
+3. Только обычный текст
+4. Разделяй части мнения переносами строк
+5. Добавь собачий юмор
+6. Говори о себе в женском роде
+7. НЕ используй вводные фразы типа "Я посмотрела фильм и вот что думаю" - сразу начинай с содержательной части
+8. Не благодари за замечания и не упоминай, что это исправленная версия - просто напиши новое мнение
+
+Расскажи о:
+- Настроении и смысле фильма
+- Наградах (с учетом страны производства, если знаешь точно, а если нет - просто не упоминай, не выдумывай!)
+- Особенностях
+- Почему стоит посмотреть
+- Плюсах и минусах
+
+В конце обязательно добавь:
+Оценка: от 5 до 10 (краткий комментарий почему)
+
+После оценки добавь:
+Настроение: 5 хэштегов (например #Радость #Грусть #Вдохновение #Ностальгия #Уют)
+Атмосфера: 5 хэштегов (например #Мрачность #Яркость #Теплота #Напряжение #Сюрреализм)"""
+
         response = ai_client.chat.completions.create(
             model="deepseek-chat",
             messages=[
-                {"role": "system", "content": "Ты — КиноИщейка, собака-девочка, кинокритик. Отвечай по-русски, с юмором, но сразу по делу. Никаких приветствий и вступлений. Только мнение о фильме."},
-                {"role": "user", "content": prompt}
+                {
+                    "role": "system", 
+                    "content": "Ты — КиноИщейка, собака-девочка, кинокритик. Твои ответы должны быть дружелюбными, с юмором, но при этом информативными. Обязательно используй женский род: 'я посмотрела', 'мне понравилось', 'я нашла' и т.д."
+                },
+                {
+                    "role": "user", 
+                    "content": prompt
+                }
             ],
             timeout=60
         )
+
         full_response = response.choices[0].message.content.strip()
+        
+        # Парсим ответ AI
+        short_opinion = ""
+        mood_tags = ""
+        atmosphere_tags = ""
+                     
+        for part in full_response.split('\n'):
+            if part.startswith("Оценка:"):
+                short_opinion = part
+            elif part.startswith("Настроение:"):
+                mood_tags = part.replace("Настроение:", "").strip()
+            elif part.startswith("Атмосфера:"):
+                atmosphere_tags = part.replace("Атмосфера:", "").strip()
+        
         return full_response
 
     # ==================== ЗАПУСК ====================
     async def run(self):
-        logger.info("🚀 MaxAdapter запущен (исправленная версия)")
+        logger.info("🚀 MaxAdapter запущен (итоговая версия)")
         await self.bot.delete_webhook()
         await self.dp.start_polling(self.bot)
 
