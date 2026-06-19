@@ -1,10 +1,8 @@
 # core/max_adapter.py — ИСПРАВЛЕННАЯ ВЕРСИЯ
-# + "Куда бежим дальше?" — сообщение с кнопкой
-# + Убран вопрос из мнения
-# + Навигация → "Куда бежим дальше?" + пальчик
-# + В режиме агента не перехватываем команды
-# + Обработка ошибок при поиске ID
-# + Убрана кнопка "Свободный вопрос" из меню агента
+# + Исправлен InlineKeyboardMarkup
+# + "Поиск по актёрам" → "Поиск по персонам"
+# + Карточка фильма → только ссылка + кнопка "Мнение"
+# + "Куда бежим дальше?" — отдельное сообщение с кнопками
 
 import logging
 import configparser
@@ -138,7 +136,7 @@ def get_main_menu():
         ],
         [
             {"type": "callback", "text": "🎉 Премьеры", "payload": "premiers"},
-            {"type": "callback", "text": "🎭 Поиск по актёрам", "payload": "person"}
+            {"type": "callback", "text": "🎭 Поиск по персонам", "payload": "person"}
         ],
         [
             {"type": "callback", "text": "🤖 ИИ-агент", "payload": "agent_menu"},
@@ -158,7 +156,7 @@ def get_agent_menu():
     buttons = [
         [
             {"type": "callback", "text": "🎬 Подобрать фильм", "payload": "agent_recommend"},
-            {"type": "callback", "text": "🎭 Поиск по актёру", "payload": "agent_actor"}
+            {"type": "callback", "text": "🎭 Поиск по персонам", "payload": "agent_actor"}
         ],
         [
             {"type": "callback", "text": "⭐ Сравнить фильмы", "payload": "agent_compare"},
@@ -305,7 +303,7 @@ def get_filter_keyboard(query, filters, total_count, has_more):
         }])
     buttons.append([{
         "type": "callback",
-        "text": "🆕 Новый поиск",
+            "text": "🆕 Новый поиск",
         "payload": "new_search"
     }])
     return InlineKeyboardMarkup(buttons)
@@ -324,7 +322,7 @@ class MaxAdapter:
         self.user_context = {}
 
         self._register_handlers()
-        logger.info("✅ MaxAdapter инициализирован (исправленная версия)")
+        logger.info("✅ MaxAdapter инициализирован")
 
     def _register_handlers(self):
         @self.dp.bot_started()
@@ -390,7 +388,7 @@ class MaxAdapter:
                 "/random — случайный фильм\n"
                 "/search — поиск по названию\n"
                 "/premiers — ожидаемые премьеры\n"
-                "/person — поиск по актёрам/режиссёрам\n"
+                "/person — поиск по персонам\n"
                 "/opinion [название или ID] — мнение о фильме\n"
                 "/profile — мой профиль\n"
                 "/faq — частые вопросы\n"
@@ -469,7 +467,7 @@ class MaxAdapter:
             "🎲 <b>Случайный фильм</b> — найду следы случайного фильма\n"
             "🔍 <b>Поиск</b> — найду отборные фильмы по названию (с фильтрами!)\n"
             "🎉 <b>Премьеры</b> — учуяю свежие ожидаемые премьеры\n"
-            "🎭 <b>Поиск по актёрам</b> — найду фильмы по имени актёра или режиссёра\n"
+            "🎭 <b>Поиск по персонам</b> — найду фильмы по имени актёра или режиссёра\n"
             "🐾 <b>Мнение о фильме</b> — расскажу о смысле фильма, его настроении и атмосфере\n"
             "🤖 <b>ИИ-агент</b> — выбери сценарий: подборка, сравнение, премьеры\n"
             "💬 <b>Пообщаться</b> — задай любой вопрос о кино (я запоминаю диалог!)\n"
@@ -504,7 +502,7 @@ class MaxAdapter:
                 "🐾 Привет! Это мой умный нюх — я умею не просто искать, а думать и советовать.\n\n"
                 "Выбери, что я для тебя сделаю:\n\n"
                 "🎬 Подобрать фильм — расскажи, что хочешь посмотреть, я подберу лучшее\n"
-                "🎭 Поиск по актёру — найду фильмы с твоим любимым актёром\n"
+                "🎭 Поиск по персонам — найду фильмы с твоим любимым актёром или режиссёром\n"
                 "⭐ Сравнить фильмы — сравню два фильма и скажу, что лучше\n"
                 "📅 Премьеры по месяцам — покажу, что выходит в этом месяце",
                 parse_mode="html",
@@ -531,10 +529,9 @@ class MaxAdapter:
             self._get_user_context(user_id)['agent_mode'] = 'actor'
             self._get_user_context(user_id)['state'] = 'awaiting_agent'
             await event.message.answer(
-                "🎭 Ага, хочешь найти что-то с любимым актёром?\n\n"
-                "Напиши его имя, и я обнюхаю все фильмы с его участием.\n"
-                "Или режиссёра — найду его лучшие работы.\n\n"
-                "Например: «Фильмы с Брэдом Питтом»",
+                "🎭 Ага, хочешь найти что-то с любимым актёром или режиссёром?\n\n"
+                "Напиши имя, и я обнюхаю все фильмы с их участием.\n\n"
+                "Например: «Фильмы с Брэдом Питтом» или «Режиссёр Кристофер Нолан»",
                 parse_mode="html"
             )
             return
@@ -570,7 +567,6 @@ class MaxAdapter:
             await event.message.answer(
                 "💬 Отлично! Я готова поболтать о кино.\n\n"
                 "Спрашивай что угодно — о фильмах, актёрах, режиссёрах, сюжетах...\n"
-                "Если я не знаю — скажу честно, но постараюсь найти ответ.\n\n"
                 "Я запоминаю наш разговор, так что можно уточнять и развивать тему!",
                 parse_mode="html"
             )
@@ -769,7 +765,7 @@ class MaxAdapter:
                 "2. Введи название фильма\n"
                 "3. Используй фильтры для уточнения\n"
                 "4. Нажми «Показать карточки»\n\n"
-                "Также можно искать по актёрам кнопкой «🎭 Поиск по актёрам»"
+                "Также можно искать по персонам кнопкой «🎭 Поиск по персонам»"
             )
         elif payload == "faq_opinion":
             text = (
@@ -1028,23 +1024,24 @@ class MaxAdapter:
         if not movie_details:
             await send_func("😢 Не могу найти информацию о фильме.")
             return
-        card_text, _ = format_movie_card(movie_details)
-        if card_text:
-            extra_buttons = [[
-                {"type": "callback", "text": "🐾 Мнение о фильме", "payload": f"opinion_{movie_details['id']}"}
-            ]]
-            keyboard = get_action_keyboard("случайный фильм", "random", extra_buttons)
-            await send_func(
-                card_text,
-                parse_mode='html',
-                attachments=[keyboard]
-            )
-            await send_func(
-                "🐾 Куда бежим дальше?",
-                attachments=[get_action_keyboard("случайный фильм", "random", extra_buttons)]
-            )
-        else:
-            await send_func("😢 Не могу показать карточку.")
+        
+        movie_id = movie_details.get('id')
+        movie_name = movie_details.get('name', 'Без названия')
+        
+        # 1. Отправляем ссылку для красивого превью
+        kp_url = f"https://www.kinopoisk.ru/film/{movie_id}/"
+        await send_func(kp_url)
+        
+        # 2. Отправляем текст с кнопкой "Мнение"
+        extra_buttons = [[
+            {"type": "callback", "text": "🐾 Мнение о фильме", "payload": f"opinion_{movie_id}"}
+        ]]
+        keyboard = get_action_keyboard("случайный фильм", "random", extra_buttons)
+        await send_func(
+            f"🎬 <b>{movie_name}</b>\nНажми кнопку, чтобы узнать мнение:",
+            parse_mode='html',
+            attachments=[keyboard]
+        )
 
     async def _handle_premiers(self, event: MessageCreated):
         user_id = event.message.sender.user_id
@@ -1103,7 +1100,6 @@ class MaxAdapter:
             await self._process_feedback_review(event, user_id, text)
             return
 
-        # ===== РЕЖИМ АГЕНТА — НЕ ПЕРЕХВАТЫВАЕМ КОМАНДЫ =====
         if state == 'awaiting_agent':
             await self._handle_agent(event, user_id, text)
             return
@@ -1176,7 +1172,7 @@ class MaxAdapter:
                     context['movies'] = movies_list
                     context['query'] = f'рекомендации агента: {query[:30]}...'
                     
-                    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                    keyboard = InlineKeyboardMarkup([
                         [{"type": "callback", "text": "🎬 Показать карточки", "payload": "agent_show_cards"}]
                     ])
                     await event.message.answer(
@@ -1186,7 +1182,7 @@ class MaxAdapter:
             
             agent_action_map = {
                 'recommend': ('подборка', 'agent_recommend'),
-                'actor': ('поиск по актёру', 'agent_actor'),
+                'actor': ('поиск по персонам', 'agent_actor'),
                 'compare': ('сравнение', 'agent_compare'),
                 'premieres': ('премьеры', 'agent_premieres'),
                 'chat': ('вопрос', 'chat')
@@ -1263,7 +1259,7 @@ class MaxAdapter:
         await event.message.answer("🔍 Взяла след! Сейчас всё обнюхаю и скажу, что нашла...")
         total_count, has_more = search_movies_with_filters(query, filters=None, count_only=True)
         if total_count == 0:
-            await event.message.answer(f"😢 Ой, по запросу «{query}» я ничего не нашла. Может, переформулируешь? Или попробуй поискать по актёрам — мой нюх там острее!")
+            await event.message.answer(f"😢 Ой, по запросу «{query}» я ничего не нашла. Может, переформулируешь? Или попробуй поискать по персонам — мой нюх там острее!")
             self.user_context.pop(user_id, None)
             return
         full_list = search_movies_with_filters(query, filters=None, count_only=False)
