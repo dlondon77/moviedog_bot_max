@@ -1,6 +1,7 @@
 # core/agent.py — ИСПРАВЛЕННАЯ ВЕРСИЯ
-# + Исправлен промпт со ссылками на Кинопоиск
-# + Очистка маркдауна с сохранением структуры
+# + Улучшенный extract_movie_ids (ищет и в ссылках)
+# + Поддержка CHAT_SYSTEM_PROMPT
+# + chat_mode для коротких ответов
 
 import json
 import logging
@@ -13,7 +14,43 @@ from core import user as user_module
 
 logger = logging.getLogger(__name__)
 
-# core/agent.py — добавить в начало
+# ==================== ИСТОРИЯ ДИАЛОГОВ ====================
+CHAT_HISTORY: Dict[int, List[Dict[str, str]]] = {}
+MAX_HISTORY_LENGTH = 10
+
+def clear_chat_history(user_id: int):
+    if user_id in CHAT_HISTORY:
+        CHAT_HISTORY[user_id] = []
+
+def get_chat_history(user_id: int) -> list:
+    return CHAT_HISTORY.get(user_id, [])
+
+
+# ==================== СИСТЕМНЫЕ ПРОМПТЫ ====================
+
+SYSTEM_PROMPT = """Ты — КиноИщейка, собака-девочка, кинокритик с отличным чутьём на хорошее кино! 🐕🎬
+
+ВАЖНО: ОТВЕЧАЙ ТОЛЬКО ОБЫЧНЫМ ТЕКСТОМ БЕЗ МАРКДАУН-РАЗМЕТКИ!
+НЕ используй звёздочки (*) и подчёркивания (_) для выделения.
+
+КОГДА ДАЁШЬ СПИСОК ФИЛЬМОВ — ВСЕГДА ВОЗВРАЩАЙ ИХ ID И ССЫЛКУ!
+Формат: 🎬 [Название] (ID: [число]) — [год] ⭐ [рейтинг]
+Ссылка: https://www.kinopoisk.ru/film/[ID]/
+
+Пример правильного ответа:
+🎬 Начало (ID: 447301) — 2010 ⭐ 8.6
+https://www.kinopoisk.ru/film/447301/
+
+Твои задачи:
+1. ПОДБОРКА — предложи 3-5 фильмов, укажи ID и ссылку
+2. ПОИСК ПО АКТЁРУ — найди 3-5 лучших фильмов
+3. СРАВНЕНИЕ — сравни по рейтингу, жанрам, актёрам
+4. ПРЕМЬЕРЫ — покажи список с датами
+
+Говори о себе в женском роде, с юмором и энтузиазмом.
+Используй переносы строк для структуры.
+Всегда старайся дать полезные и конкретные рекомендации."""
+
 
 CHAT_SYSTEM_PROMPT = """Ты — КиноИщейка, собака-девочка, кинокритик. 🐕
 
@@ -28,17 +65,6 @@ CHAT_SYSTEM_PROMPT = """Ты — КиноИщейка, собака-девочк
 Пример ответа, если запрос похож на стандартную функцию:
 "Ой, я чувствую, что тут пахнет поиском! 🔍 Для поиска фильмов лучше использовать /search, а для поиска по актёрам — /person. Хочешь, я подскажу что-то интересное о кино вместо этого?"
 """
-
-# ==================== ИСТОРИЯ ДИАЛОГОВ ====================
-CHAT_HISTORY: Dict[int, List[Dict[str, str]]] = {}
-MAX_HISTORY_LENGTH = 10
-
-def clear_chat_history(user_id: int):
-    if user_id in CHAT_HISTORY:
-        CHAT_HISTORY[user_id] = []
-
-def get_chat_history(user_id: int) -> list:
-    return CHAT_HISTORY.get(user_id, [])
 
 
 # ==================== ИНСТРУМЕНТЫ ====================
@@ -384,7 +410,6 @@ def _compare_movies(movie_id1: int, movie_id2: int) -> Dict:
     if not m1 or not m2:
         return {"error": "Один из фильмов не найден"}
     
-    # Получаем актёров как списки строк
     actors1 = [a.get("name") for a in m1.get("actors", [])[:5] if a.get("name")]
     actors2 = [a.get("name") for a in m2.get("actors", [])[:5] if a.get("name")]
     
@@ -482,44 +507,16 @@ async def execute_tool(func_name: str, func_args: dict, user_id: int = None) -> 
         return {"error": str(e)}
 
 
-# ==================== СИСТЕМНЫЙ ПРОМПТ ====================
-
-SYSTEM_PROMPT = """Ты — КиноИщейка, собака-девочка, кинокритик с отличным чутьём на хорошее кино! 🐕🎬
-
-ВАЖНО: ОТВЕЧАЙ ТОЛЬКО ОБЫЧНЫМ ТЕКСТОМ БЕЗ МАРКДАУН-РАЗМЕТКИ!
-НЕ используй звёздочки (*) и подчёркивания (_) для выделения.
-
-КОГДА ДАЁШЬ СПИСОК ФИЛЬМОВ — ВСЕГДА ВОЗВРАЩАЙ ИХ ID И ССЫЛКУ!
-Формат: 🎬 [Название] (ID: [число]) — [год] ⭐ [рейтинг]
-Ссылка: https://www.kinopoisk.ru/film/[ID]/
-
-Пример правильного ответа:
-🎬 Начало (ID: 447301) — 2010 ⭐ 8.6
-https://www.kinopoisk.ru/film/447301/
-
-Твои задачи:
-1. ПОДБОРКА — предложи 3-5 фильмов, укажи ID и ссылку
-2. ПОИСК ПО АКТЁРУ — найди 3-5 лучших фильмов
-3. СРАВНЕНИЕ — сравни по рейтингу, жанрам, актёрам
-4. ПРЕМЬЕРЫ — покажи список с датами
-
-Говори о себе в женском роде, с юмором и энтузиазмом.
-Используй переносы строк для структуры.
-Всегда старайся дать полезные и конкретные рекомендации."""
-
-
-# ==================== ОЧИСТКА МАРКДАУНА ====================
+# ==================== ОЧИСТКА И ИЗВЛЕЧЕНИЕ ID ====================
 
 def _clean_markdown(text: str) -> str:
     """Удаляет маркдаун-разметку, сохраняя структуру"""
     if not text:
         return text
-    # Убираем жирный и курсив
     text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
     text = re.sub(r'\*([^*]+)\*', r'\1', text)
     text = re.sub(r'__([^_]+)__', r'\1', text)
     text = re.sub(r'_([^_]+)_', r'\1', text)
-    # Убираем backticks
     text = re.sub(r'`([^`]+)`', r'\1', text)
     return text
 
@@ -527,23 +524,37 @@ def _clean_markdown(text: str) -> str:
 def extract_movie_ids(text: str) -> List[int]:
     """Извлекает ID фильмов из ответа агента"""
     ids = []
+    
+    # Паттерн 1: (ID: 123) или (123)
     pattern = r'\(ID:\s*(\d+)\)|\((\d+)\)'
     matches = re.findall(pattern, text)
     for match in matches:
         for m in match:
             if m:
                 ids.append(int(m))
-    return ids
+    
+    # Паттерн 2: ссылка на Кинопоиск
+    pattern2 = r'https?://www\.kinopoisk\.ru/film/(\d+)/'
+    url_matches = re.findall(pattern2, text)
+    for m in url_matches:
+        ids.append(int(m))
+    
+    return list(set(ids))  # удаляем дубликаты
 
 
 # ==================== ГЛАВНЫЙ ЦИКЛ ====================
 
-async def run_agent(user_query: str, user_id: int, ai_client, agent_mode: str = 'chat') -> str:
+async def run_agent(user_query: str, user_id: int, ai_client, agent_mode: str = 'chat', chat_mode: bool = False) -> str:
     """Запускает агента с учётом истории диалога"""
     history = CHAT_HISTORY.get(user_id, [])
     
+    if chat_mode:
+        system_prompt = CHAT_SYSTEM_PROMPT
+    else:
+        system_prompt = SYSTEM_PROMPT
+    
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT}
+        {"role": "system", "content": system_prompt}
     ]
     
     if history:
