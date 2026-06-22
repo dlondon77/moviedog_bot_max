@@ -1,15 +1,16 @@
-# core/max_adapter.py — ПОЛНАЯ ВЕРСИЯ
-# + КиноЛогово (4 пункта, без премьер)
-# + Актёрский нюх — анализ ролей
-# + По сюжету — поиск через агента
-# + Премьеры с выбором месяца
-# + Свежий взгляд (админ + премиум)
+# core/max_adapter.py — ИСПРАВЛЕННАЯ ВЕРСИЯ
+# + Свежий взгляд — прямо под мнением
+# + Премьеры — исправлен обработчик
+# + Актёрский нюх и По сюжету — увеличен таймаут
+# + Кнопка "Карточки" — прилеплена к подборкам
+# + Пообщаться — автоудаление "Дай-ка подумаю..."
 
 import logging
 import configparser
 import os
 import sys
 import re
+import asyncio
 from datetime import date, datetime
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -103,7 +104,7 @@ config = load_config()
 DEEPSEEK_KEY = os.environ.get('OPENAI_API_KEY') or config.get('OpenAI', 'api_key', fallback='')
 
 if DEEPSEEK_KEY:
-    http_client = httpx.Client(timeout=120.0, follow_redirects=True)
+    http_client = httpx.Client(timeout=180.0, follow_redirects=True)
     ai_client = OpenAI(
         api_key=DEEPSEEK_KEY,
         base_url=config.get('OpenAI', 'base_url', fallback='https://api.deepseek.com/v1'),
@@ -350,6 +351,52 @@ def _is_premium_tariff(tariff_name: str) -> bool:
     return tariff_name in ['Ищейка', 'Вожак']
 
 
+def _format_opinion_with_buttons(opinion, movie_name, movie_year, movie_id, source, user_id, is_premium):
+    """Форматирует мнение с кнопками прямо в одном сообщении"""
+    kp_url = f"https://www.kinopoisk.ru/film/{movie_id}/"
+    title_with_link = f"<a href='{kp_url}'><b>{movie_name}</b></a> ({movie_year})"
+    
+    text = f"🐾 Я посмотрела {title_with_link}, и вот что думаю:\n\n{opinion}\n\n"
+    
+    # Добавляем кнопки как текст (они будут в attachments)
+    buttons = []
+    
+    # Свежий взгляд — только для премиум
+    if is_premium:
+        buttons.append([
+            {"type": "callback", "text": "🔄 Свежий взгляд", "payload": f"regenerate_{movie_id}_{source}"}
+        ])
+    
+    # Кнопки в зависимости от источника
+    if source == "random":
+        buttons.append([
+            {"type": "callback", "text": "🎲 Ещё случайный", "payload": "random"},
+            {"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}
+        ])
+    elif source == "search":
+        buttons.append([
+            {"type": "callback", "text": "🔄 Ещё поиск", "payload": "search"},
+            {"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}
+        ])
+    elif source == "person":
+        buttons.append([
+            {"type": "callback", "text": "🔄 Ещё поиск по персонам", "payload": "person"},
+            {"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}
+        ])
+    elif source == "premiers":
+        buttons.append([
+            {"type": "callback", "text": "🔄 Ещё премьеры", "payload": "premiers"},
+            {"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}
+        ])
+    else:
+        buttons.append([
+            {"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}
+        ])
+    
+    keyboard = InlineKeyboardMarkup(buttons)
+    return text, keyboard
+
+
 # ==================== ОСНОВНОЙ КЛАСС АДАПТЕРА ====================
 class MaxAdapter:
     def __init__(self):
@@ -363,7 +410,7 @@ class MaxAdapter:
         self.user_context = {}
 
         self._register_handlers()
-        logger.info("✅ MaxAdapter инициализирован (полная версия)")
+        logger.info("✅ MaxAdapter инициализирован (исправленная версия)")
 
     def _register_handlers(self):
         @self.dp.bot_started()
@@ -542,6 +589,12 @@ class MaxAdapter:
             except AttributeError:
                 pass
 
+        # ===== ПРЕМЬЕРЫ ПО МЕСЯЦАМ (ДО ВСЕХ ПРОВЕРОК!) =====
+        if payload.startswith("premiers_month_"):
+            month = int(payload.split("_")[2])
+            await self._handle_premiers_by_month(event, user_id, month)
+            return
+
         # ===== МЕНЮ КиноЛогово =====
         if payload == "agent_menu":
             await event.message.answer(
@@ -631,12 +684,6 @@ class MaxAdapter:
         # ===== АГЕНТ — ПОКАЗ КАРТОЧЕК =====
         if payload == "agent_show_cards":
             await self._handle_agent_show_cards(event, user_id)
-            return
-
-        # ===== ПРЕМЬЕРЫ ПО МЕСЯЦАМ =====
-        if payload.startswith("premiers_month_"):
-            month = int(payload.split("_")[2])
-            await self._handle_premiers_by_month(event, user_id, month)
             return
 
         # ===== FAQ =====
@@ -1227,8 +1274,20 @@ class MaxAdapter:
                 )
                 return
             
+            # Отправляем "Дай-ка подумаю..." с автоудалением
+            thinking_msg = await event.message.answer("💬 Дай-ка подумаю... 🐾")
+            
+            # Автоудаление через 2 секунды
+            async def delete_after_delay():
+                await asyncio.sleep(2)
+                try:
+                    await thinking_msg.delete()
+                except Exception:
+                    pass
+            
+            asyncio.create_task(delete_after_delay())
+            
             enhanced_query = f"Ответь коротко (2-3 предложения) и интересно: {query}"
-            await event.message.answer("💬 Дай-ка подумаю... 🐾")
             
             if not ai_client:
                 await event.message.answer("😢 Генерация временно недоступна.")
@@ -1240,17 +1299,11 @@ class MaxAdapter:
                 if user_id not in ADMIN_IDS:
                     increment_stat_counter(user_id, 'opinion_count')
                 
-                await event.message.answer(response)
-                
-                buttons = [
-                    [{"type": "callback", "text": "💬 Ещё спросить", "payload": "chat"}],
+                # Ответ с кнопкой "В главное меню"
+                keyboard = InlineKeyboardMarkup([
                     [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
-                ]
-                keyboard = InlineKeyboardMarkup(buttons)
-                await event.message.answer(
-                    "🐾 Куда бежим дальше?",
-                    attachments=[keyboard]
-                )
+                ])
+                await event.message.answer(response, attachments=[keyboard])
                 
             except Exception as e:
                 logger.error(f"Ошибка агента: {e}")
@@ -1286,11 +1339,11 @@ class MaxAdapter:
                 if user_id not in ADMIN_IDS:
                     increment_stat_counter(user_id, 'opinion_count')
                 
+                # Извлекаем ID и показываем карточки
                 movie_ids = extract_movie_ids(response)
                 logger.info(f"Найдено ID в ответе агента: {movie_ids}")
                 
-                await event.message.answer(response)
-                
+                # Формируем ответ с кнопкой карточек
                 if movie_ids:
                     movies_list = []
                     for movie_id in movie_ids[:10]:
@@ -1305,19 +1358,18 @@ class MaxAdapter:
                         context['movies'] = movies_list
                         context['query'] = f'актёрский нюх: {query[:30]}...'
                         
+                        # Кнопка "Показать карточки" прямо в ответе
                         keyboard = InlineKeyboardMarkup([
-                            [{"type": "callback", "text": f"🎬 Показать {len(movies_list)} карточек", "payload": "agent_show_cards"}]
+                            [{"type": "callback", "text": f"🎬 Показать {len(movies_list)} карточек", "payload": "agent_show_cards"}],
+                            [{"type": "callback", "text": "🐾 Ещё актёрский нюх", "payload": "agent_actor"}],
+                            [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
                         ])
-                        await event.message.answer(
-                            "👇 Хочешь посмотреть карточки этих фильмов?",
-                            attachments=[keyboard]
-                        )
+                        await event.message.answer(response, attachments=[keyboard])
+                        return
                 
+                # Если нет карточек — просто ответ
                 keyboard = get_action_keyboard("актёрский нюх", "agent_actor")
-                await event.message.answer(
-                    "🐾 Куда бежим дальше?",
-                    attachments=[keyboard]
-                )
+                await event.message.answer(response, attachments=[keyboard])
                 
             except Exception as e:
                 logger.error(f"Ошибка агента: {e}")
@@ -1352,8 +1404,6 @@ class MaxAdapter:
                 movie_ids = extract_movie_ids(response)
                 logger.info(f"Найдено ID в ответе агента: {movie_ids}")
                 
-                await event.message.answer(response)
-                
                 if movie_ids:
                     movies_list = []
                     for movie_id in movie_ids[:10]:
@@ -1369,18 +1419,15 @@ class MaxAdapter:
                         context['query'] = f'по сюжету: {query[:30]}...'
                         
                         keyboard = InlineKeyboardMarkup([
-                            [{"type": "callback", "text": f"🎬 Показать {len(movies_list)} карточек", "payload": "agent_show_cards"}]
+                            [{"type": "callback", "text": f"🎬 Показать {len(movies_list)} карточек", "payload": "agent_show_cards"}],
+                            [{"type": "callback", "text": "🔎 Ещё по сюжету", "payload": "agent_plot_search"}],
+                            [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
                         ])
-                        await event.message.answer(
-                            "👇 Хочешь посмотреть карточки этих фильмов?",
-                            attachments=[keyboard]
-                        )
+                        await event.message.answer(response, attachments=[keyboard])
+                        return
                 
                 keyboard = get_action_keyboard("по сюжету", "agent_plot_search")
-                await event.message.answer(
-                    "🐾 Куда бежим дальше?",
-                    attachments=[keyboard]
-                )
+                await event.message.answer(response, attachments=[keyboard])
                 
             except Exception as e:
                 logger.error(f"Ошибка агента: {e}")
@@ -1410,8 +1457,6 @@ class MaxAdapter:
             movie_ids = extract_movie_ids(response)
             logger.info(f"Найдено ID в ответе агента: {movie_ids}")
             
-            await event.message.answer(response)
-            
             if movie_ids:
                 movies_list = []
                 for movie_id in movie_ids[:10]:
@@ -1426,27 +1471,22 @@ class MaxAdapter:
                     context['movies'] = movies_list
                     context['query'] = f'рекомендации агента: {query[:30]}...'
                     
+                    # Кнопка "Показать карточки" прямо в ответе
                     keyboard = InlineKeyboardMarkup([
-                        [{"type": "callback", "text": f"🎬 Показать {len(movies_list)} карточек", "payload": "agent_show_cards"}]
+                        [{"type": "callback", "text": f"🎬 Показать {len(movies_list)} карточек", "payload": "agent_show_cards"}],
+                        [{"type": "callback", "text": "🎬 Ещё подборка", "payload": "agent_recommend"}],
+                        [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
                     ])
-                    await event.message.answer(
-                        "👇 Хочешь посмотреть карточки этих фильмов?",
-                        attachments=[keyboard]
-                    )
+                    await event.message.answer(response, attachments=[keyboard])
+                    return
             
             agent_action_map = {
                 'recommend': ('подборка', 'agent_recommend'),
-                'actor': ('актёрский нюх', 'agent_actor'),
                 'compare': ('сравнение', 'agent_compare'),
-                'plot_search': ('по сюжету', 'agent_plot_search'),
-                'chat': ('вопрос', 'chat')
             }
             action_name, action_payload = agent_action_map.get(agent_mode, ('вопрос', 'chat'))
             keyboard = get_action_keyboard(action_name, action_payload)
-            await event.message.answer(
-                "🐾 Куда бежим дальше?",
-                attachments=[keyboard]
-            )
+            await event.message.answer(response, attachments=[keyboard])
             
         except Exception as e:
             logger.error(f"Ошибка агента: {e}")
@@ -1595,70 +1635,29 @@ class MaxAdapter:
 
         cached = get_cached_opinion(movie_id)
         if cached:
-            formatted_opinion = self._format_opinion(cached, movie_name, movie_year, movie_id)
-            await send_func(formatted_opinion, parse_mode="html")
+            opinion = cached
+        else:
+            try:
+                opinion = await self._generate_opinion(movie_details)
+                if opinion:
+                    save_opinion_cache(movie_id, opinion)
+                else:
+                    await send_func("😢 Не удалось сгенерировать мнение.")
+                    return
+            except Exception as e:
+                logger.error(f"Ошибка генерации: {e}")
+                await send_func("🐾 Гав! Я запуталась в проводах. Попробуй позже.")
+                return
+
+        if opinion:
             if user_id not in ADMIN_IDS:
                 increment_stat_counter(user_id, 'opinion_count')
             record_user_opinion(user_id, movie_id)
             
-            await self._send_opinion_buttons(send_func, source, movie_id, user_id)
-            return
-
-        try:
-            opinion = await self._generate_opinion(movie_details)
-            if opinion:
-                save_opinion_cache(movie_id, opinion)
-                if user_id not in ADMIN_IDS:
-                    increment_stat_counter(user_id, 'opinion_count')
-                record_user_opinion(user_id, movie_id)
-                formatted_opinion = self._format_opinion(opinion, movie_name, movie_year, movie_id)
-                await send_func(formatted_opinion, parse_mode="html")
-                
-                await self._send_opinion_buttons(send_func, source, movie_id, user_id)
-            else:
-                await send_func("😢 Не удалось сгенерировать мнение.")
-        except Exception as e:
-            logger.error(f"Ошибка генерации: {e}")
-            await send_func("🐾 Гав! Я запуталась в проводах. Попробуй позже!")
-
-    async def _send_opinion_buttons(self, send_func, source, movie_id, user_id):
-        """Отправляет кнопки после мнения"""
-        buttons = []
-        
-        # Админ или премиум — показываем свежий взгляд
-        if user_id in ADMIN_IDS or _is_premium_tariff(get_user_limits(user_id).get('tariff_name', '')):
-            buttons.append([
-                {"type": "callback", "text": "🔄 Свежий взгляд", "payload": f"regenerate_{movie_id}_{source}"}
-            ])
-        
-        # Кнопки в зависимости от источника
-        if source == "random":
-            buttons.append([
-                {"type": "callback", "text": "🎲 Ещё случайный", "payload": "random"},
-                {"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}
-            ])
-        elif source == "search":
-            buttons.append([
-                {"type": "callback", "text": "🔄 Ещё поиск", "payload": "search"},
-                {"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}
-            ])
-        elif source == "person":
-            buttons.append([
-                {"type": "callback", "text": "🔄 Ещё поиск по персонам", "payload": "person"},
-                {"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}
-            ])
-        elif source == "premiers":
-            buttons.append([
-                {"type": "callback", "text": "🔄 Ещё премьеры", "payload": "premiers"},
-                {"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}
-            ])
-        else:
-            buttons.append([
-                {"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}
-            ])
-        
-        keyboard = InlineKeyboardMarkup(buttons)
-        await send_func("🐾 Куда бежим дальше?", attachments=[keyboard])
+            # Форматируем мнение с кнопками прямо в одном сообщении
+            is_premium = user_id in ADMIN_IDS or _is_premium_tariff(get_user_limits(user_id).get('tariff_name', ''))
+            text, keyboard = _format_opinion_with_buttons(opinion, movie_name, movie_year, movie_id, source, user_id, is_premium)
+            await send_func(text, parse_mode="html", attachments=[keyboard])
 
     # ===== СВЕЖИЙ ВЗГЛЯД (регенерация) =====
     async def _handle_regenerate(self, event, user_id, movie_id, source):
@@ -1681,9 +1680,9 @@ class MaxAdapter:
                 opinion = await self._generate_opinion(movie_details, force_regenerate=True)
                 if opinion:
                     save_opinion_cache(movie_id, opinion)
-                    formatted_opinion = self._format_opinion(opinion, movie_name, movie_year, movie_id)
-                    await event.message.answer(formatted_opinion, parse_mode="html")
-                    await self._send_opinion_buttons(event.message.answer, source, movie_id, user_id)
+                    is_premium = True
+                    text, keyboard = _format_opinion_with_buttons(opinion, movie_name, movie_year, movie_id, source, user_id, is_premium)
+                    await event.message.answer(text, parse_mode="html", attachments=[keyboard])
                 else:
                     await event.message.answer("😢 Не удалось сгенерировать новое мнение.")
             except Exception as e:
@@ -1730,10 +1729,9 @@ class MaxAdapter:
                 save_opinion_cache(movie_id, opinion)
                 increment_stat_counter(user_id, 'regeneration_count')
                 
-                formatted_opinion = self._format_opinion(opinion, movie_name, movie_year, movie_id)
-                await event.message.answer(formatted_opinion, parse_mode="html")
-                
-                await self._send_opinion_buttons(event.message.answer, source, movie_id, user_id)
+                is_premium = True
+                text, keyboard = _format_opinion_with_buttons(opinion, movie_name, movie_year, movie_id, source, user_id, is_premium)
+                await event.message.answer(text, parse_mode="html", attachments=[keyboard])
             else:
                 await event.message.answer("😢 Не удалось сгенерировать новое мнение.")
         except Exception as e:
@@ -1829,7 +1827,7 @@ class MaxAdapter:
                 {"role": "system", "content": "Ты — КиноИщейка, собака-девочка, кинокритик. Твои ответы должны быть дружелюбными, с юмором, но при этом информативными. Обязательно используй женский род: 'я посмотрела', 'мне понравилось', 'я нашла' и т.д."},
                 {"role": "user", "content": prompt}
             ],
-            timeout=60
+            timeout=180
         )
 
         full_response = response.choices[0].message.content.strip()
@@ -1850,7 +1848,7 @@ class MaxAdapter:
 
     # ==================== ЗАПУСК ====================
     async def run(self):
-        logger.info("🚀 MaxAdapter запущен (полная версия)")
+        logger.info("🚀 MaxAdapter запущен (исправленная версия)")
         await self.bot.delete_webhook()
         await self.dp.start_polling(self.bot)
 
