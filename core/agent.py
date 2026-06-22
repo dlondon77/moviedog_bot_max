@@ -562,7 +562,7 @@ async def run_agent(user_query: str, user_id: int, ai_client, agent_mode: str = 
     
     messages.append({"role": "user", "content": user_query})
     
-    max_iterations = 10
+    max_iterations = 15
     iteration = 0
     
     while iteration < max_iterations:
