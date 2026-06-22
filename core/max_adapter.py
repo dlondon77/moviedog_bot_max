@@ -1,6 +1,8 @@
-# core/max_adapter.py — обновлённая версия
-# + "КиноЛогово" вместо "КиноИИскать"
-# + "Пообщаться" — короткие ответы + предложение кнопок при поисковом запросе
+# core/max_adapter.py — СВЕЖИЙ ВЗГЛЯД
+# + Регенерация мнения (Свежий взгляд)
+# + Кнопка под мнением (только для Ищейка/Вожак)
+# + Лимиты регенерации
+# + Промпт с учётом регенерации
 
 import logging
 import configparser
@@ -312,9 +314,13 @@ def get_filter_keyboard(query, filters, total_count, has_more):
 
 # ==================== ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ====================
 def _is_search_intent(text: str) -> bool:
-    """Проверяет, похож ли запрос на поиск"""
     keywords = ['найди', 'поищи', 'ищи', 'покажи', 'фильм с', 'актёр', 'режиссёр', 'найти', 'подбери']
     return any(kw in text.lower() for kw in keywords)
+
+
+def _is_premium_tariff(tariff_name: str) -> bool:
+    """Проверяет, является ли тариф премиум (Ищейка, Вожак)"""
+    return tariff_name in ['Ищейка', 'Вожак']
 
 
 # ==================== ОСНОВНОЙ КЛАСС АДАПТЕРА ====================
@@ -330,7 +336,7 @@ class MaxAdapter:
         self.user_context = {}
 
         self._register_handlers()
-        logger.info("✅ MaxAdapter инициализирован (с КиноЛогово)")
+        logger.info("✅ MaxAdapter инициализирован (со Свежим взглядом)")
 
     def _register_handlers(self):
         @self.dp.bot_started()
@@ -477,6 +483,7 @@ class MaxAdapter:
             "🎉 <b>Премьеры</b> — учуяю свежие ожидаемые премьеры\n"
             "🎭 <b>Поиск по персонам</b> — найду фильмы по имени актёра или режиссёра\n"
             "🐾 <b>Мнение о фильме</b> — расскажу о смысле фильма, его настроении и атмосфере\n"
+            "🔄 <b>Свежий взгляд</b> — перегенерирую мнение (для тарифов Ищейка и Вожак)\n"
             "🐺 <b>КиноЛогово</b> — умные подборки, сравнения, премьеры по месяцам\n"
             "💬 <b>Пообщаться</b> — короткие факты и лёгкий диалог (я запоминаю разговор!)\n"
             "❓ <b>FAQ</b> — ответы на частые вопросы\n"
@@ -666,7 +673,7 @@ class MaxAdapter:
             await self._show_premiers_page(event, user_id, page)
             return
 
-        # ===== ОСНОВНЫЕ КОМАНДЫ =====
+        # ===== МНЕНИЕ =====
         if payload.startswith("opinion_"):
             parts = payload.split("_")
             movie_id = int(parts[1])
@@ -674,6 +681,15 @@ class MaxAdapter:
             await self._send_opinion_by_id(event, user_id, movie_id, source)
             return
 
+        # ===== СВЕЖИЙ ВЗГЛЯД (регенерация) =====
+        if payload.startswith("regenerate_"):
+            parts = payload.split("_")
+            movie_id = int(parts[1])
+            source = parts[2] if len(parts) > 2 else "search"
+            await self._handle_regenerate(event, user_id, movie_id, source)
+            return
+
+        # ===== ОСНОВНЫЕ КОМАНДЫ =====
         if payload == "random":
             await event.message.answer("🎲 Ищу случайный фильм...")
             await self._send_random_result(event.message.answer)
@@ -792,11 +808,11 @@ class MaxAdapter:
         elif payload == "faq_limits":
             text = (
                 "⚠️ <b>Лимиты бота</b>\n\n"
-                "У меня есть суточные лимиты на запросы мнений:\n"
+                "У меня есть суточные лимиты на запросы:\n"
                 "• 🐶 Щенячий азарт: 5 мнений в день (бесплатно)\n"
                 "• 🐕 Охотничий: 10 мнений в день\n"
-                "• 🕵️ Ищейка: 30 мнений в день\n"
-                "• 🐺 Вожак: безлимит\n\n"
+                "• 🕵️ Ищейка: 30 мнений в день + 5 свежих взглядов\n"
+                "• 🐺 Вожак: безлимит + безлимит свежих взглядов\n\n"
                 "Лимиты сбрасываются в полночь!"
             )
         elif payload == "faq_suggest":
@@ -1053,7 +1069,7 @@ class MaxAdapter:
             await send_func(card_text, parse_mode='html', attachments=[keyboard])
         else:
             await send_func("😢 Не могу показать карточку.")
-        
+
     async def _handle_premiers(self, event: MessageCreated):
         user_id = event.message.sender.user_id
         await event.message.answer("🎉 Ищу ожидаемые премьеры...")
@@ -1081,11 +1097,17 @@ class MaxAdapter:
             'Вожак': '🐺'
         }
         icon = tariff_icons.get(limits['tariff_name'], '🐾')
+        
+        # Определяем наличие свежих взглядов
+        regeneration_limit = limits.get('regeneration_limit', 0)
+        regeneration_used = stats.get('regeneration_count', 0)
+        regeneration_text = f"{regeneration_used}/{regeneration_limit}" if regeneration_limit > 0 else "∞"
+        
         await send_func(
             f"{icon} <b>Твой тариф: {limits['tariff_name']}</b>\n\n"
             f"📊 <b>Лимиты на сегодня:</b>\n"
             f"• Мнений: {stats['opinion_count']}/{limits['opinion_limit']}\n"
-            f"• Свежих взглядов: {stats['regeneration_count']}/{limits['regeneration_limit']}\n\n"
+            f"• Свежих взглядов: {regeneration_text}\n\n"
             f"📅 Действует до: {limits['tariff_end_date'][:10]}\n\n"
             f"🐾 Лимиты обновляются в полночь!",
             parse_mode="html"
@@ -1125,7 +1147,7 @@ class MaxAdapter:
         else:
             await self._perform_search(event, user_id, text)
 
-    # ===== КиноЛогово =====
+    # ===== КиноЛогово и Пообщаться =====
     async def _handle_agent(self, event: MessageCreated, user_id: int, query: str):
         context = self._get_user_context(user_id)
         agent_mode = context.get('agent_mode', 'chat')
@@ -1143,7 +1165,6 @@ class MaxAdapter:
 
         # ===== РЕЖИМ "ПООБЩАТЬСЯ" =====
         if agent_mode == 'chat':
-            # Проверяем, не похоже ли на поиск
             if _is_search_intent(query):
                 buttons = [
                     [{"type": "callback", "text": "🔍 Поиск по названию", "payload": "search"}],
@@ -1160,7 +1181,6 @@ class MaxAdapter:
                 )
                 return
             
-            # Если не похоже — короткий ответ
             enhanced_query = f"Ответь коротко (2-3 предложения) и интересно: {query}"
             await event.message.answer("💬 Дай-ка подумаю... 🐾")
             
@@ -1169,7 +1189,6 @@ class MaxAdapter:
                 return
             
             try:
-                # Используем CHAT_SYSTEM_PROMPT для коротких ответов
                 response = await run_agent(enhanced_query, user_id, ai_client, agent_mode, chat_mode=True)
                 
                 if user_id not in ADMIN_IDS:
@@ -1177,7 +1196,6 @@ class MaxAdapter:
                 
                 await event.message.answer(response)
                 
-                # Кнопки после ответа
                 buttons = [
                     [{"type": "callback", "text": "💬 Ещё спросить", "payload": "chat"}],
                     [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
@@ -1260,7 +1278,7 @@ class MaxAdapter:
             
         except Exception as e:
             logger.error(f"Ошибка агента: {e}")
-            await event.message.answer("🐾 Гав! Я запуталась в проводах. Попробуй позже, а я пока перезагружу нюх!")
+            await event.message.answer("🐾 Гав! Я запуталась в проводах. Попробуй позже!")
 
     # ===== ПОКАЗ КАРТОЧЕК ИЗ АГЕНТА =====
     async def _handle_agent_show_cards(self, event, user_id):
@@ -1357,7 +1375,7 @@ class MaxAdapter:
         context['is_person_search'] = True
         await self._show_person_search_page(event, user_id, 0, query)
 
-    # ==================== МНЕНИЕ ====================
+    # ==================== МНЕНИЕ И СВЕЖИЙ ВЗГЛЯД ====================
     async def _handle_opinion_command(self, event: MessageCreated):
         user_id = event.message.sender.user_id
         text = event.message.body.text.replace('/opinion', '').strip()
@@ -1410,7 +1428,11 @@ class MaxAdapter:
             if user_id not in ADMIN_IDS:
                 increment_stat_counter(user_id, 'opinion_count')
             record_user_opinion(user_id, movie_id)
-            await self._send_opinion_buttons(send_func, source, movie_id)
+            
+            # Проверяем, есть ли у пользователя доступ к свежему взгляду
+            limits = get_user_limits(user_id)
+            is_premium = _is_premium_tariff(limits.get('tariff_name', ''))
+            await self._send_opinion_buttons(send_func, source, movie_id, is_premium)
             return
 
         try:
@@ -1422,48 +1444,118 @@ class MaxAdapter:
                 record_user_opinion(user_id, movie_id)
                 formatted_opinion = self._format_opinion(opinion, movie_name, movie_year, movie_id)
                 await send_func(formatted_opinion, parse_mode="html")
-                await self._send_opinion_buttons(send_func, source, movie_id)
+                
+                limits = get_user_limits(user_id)
+                is_premium = _is_premium_tariff(limits.get('tariff_name', ''))
+                await self._send_opinion_buttons(send_func, source, movie_id, is_premium)
             else:
                 await send_func("😢 Не удалось сгенерировать мнение.")
         except Exception as e:
             logger.error(f"Ошибка генерации: {e}")
-            await send_func("🐾 Гав! Я запуталась в проводах. Попробуй позже, а я пока перезагружу нюх!")
+            await send_func("🐾 Гав! Я запуталась в проводах. Попробуй позже!")
 
-    async def _send_opinion_buttons(self, send_func, source, movie_id):
+    async def _send_opinion_buttons(self, send_func, source, movie_id, is_premium: bool = False):
+        """Отправляет кнопки после мнения"""
+        buttons = []
+        
+        # Свежий взгляд — только для премиум-тарифов
+        if is_premium:
+            buttons.append([
+                {"type": "callback", "text": "🔄 Свежий взгляд", "payload": f"regenerate_{movie_id}_{source}"}
+            ])
+        
+        # Кнопки в зависимости от источника
         if source == "random":
-            buttons = [
-                [{"type": "callback", "text": "🎲 Ещё случайный", "payload": "random"}],
-                [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
-            ]
+            buttons.append([
+                {"type": "callback", "text": "🎲 Ещё случайный", "payload": "random"},
+                {"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}
+            ])
         elif source == "search":
-            buttons = [
-                [{"type": "callback", "text": "🔄 Ещё поиск", "payload": "search"}],
-                [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
-            ]
+            buttons.append([
+                {"type": "callback", "text": "🔄 Ещё поиск", "payload": "search"},
+                {"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}
+            ])
         elif source == "person":
-            buttons = [
-                [{"type": "callback", "text": "🔄 Ещё поиск по персонам", "payload": "person"}],
-                [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
-            ]
+            buttons.append([
+                {"type": "callback", "text": "🔄 Ещё поиск по персонам", "payload": "person"},
+                {"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}
+            ])
         elif source == "premiers":
-            buttons = [
-                [{"type": "callback", "text": "🔄 Ещё премьеры", "payload": "premiers"}],
-                [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
-            ]
+            buttons.append([
+                {"type": "callback", "text": "🔄 Ещё премьеры", "payload": "premiers"},
+                {"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}
+            ])
         else:
-            buttons = [
-                [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
-            ]
+            buttons.append([
+                {"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}
+            ])
         
         keyboard = InlineKeyboardMarkup(buttons)
         await send_func("🐾 Куда бежим дальше?", attachments=[keyboard])
+
+    # ===== СВЕЖИЙ ВЗГЛЯД (регенерация) =====
+    async def _handle_regenerate(self, event, user_id, movie_id, source):
+        """Обработка регенерации мнения (Свежий взгляд)"""
+        
+        # Проверяем тариф
+        limits = get_user_limits(user_id)
+        stats = get_user_stats(user_id, date.today().isoformat())
+        
+        if not _is_premium_tariff(limits.get('tariff_name', '')):
+            await event.message.answer(
+                "🔄 <b>Свежий взгляд</b>\n\n"
+                "Эта функция доступна только на тарифах «Ищейка» и «Вожак».\n\n"
+                "💰 Оформи подписку, чтобы перегенерировать мнение:\n"
+                "• 🕵️ Ищейка (399 ₽/мес) — 5 свежих взглядов в день\n"
+                "• 🐺 Вожак (999 ₽/мес) — безлимит",
+                parse_mode="html"
+            )
+            return
+        
+        # Проверяем лимит на свежие взгляды
+        regeneration_limit = limits.get('regeneration_limit', 0)
+        if stats.get('regeneration_count', 0) >= regeneration_limit and regeneration_limit > 0:
+            await event.message.answer(
+                f"🐾 Сегодня у тебя уже использовано {stats['regeneration_count']} свежих взглядов из {regeneration_limit}.\n"
+                f"Лимит обновится завтра!"
+            )
+            return
+        
+        # Получаем фильм
+        movie_details = get_movie_details(movie_id)
+        if not movie_details:
+            await event.message.answer("😢 Не могу найти фильм.")
+            return
+        
+        movie_name = movie_details.get('name', 'Без названия')
+        movie_year = movie_details.get('year', '')
+        
+        # Генерируем новое мнение
+        await event.message.answer("🔄 Пересматриваю фильм с новым взглядом...")
+        
+        try:
+            opinion = await self._generate_opinion(movie_details, force_regenerate=True)
+            if opinion:
+                save_opinion_cache(movie_id, opinion)
+                increment_stat_counter(user_id, 'regeneration_count')
+                
+                formatted_opinion = self._format_opinion(opinion, movie_name, movie_year, movie_id)
+                await event.message.answer(formatted_opinion, parse_mode="html")
+                
+                # Кнопки после регенерации
+                await self._send_opinion_buttons(event.message.answer, source, movie_id, is_premium=True)
+            else:
+                await event.message.answer("😢 Не удалось сгенерировать новое мнение.")
+        except Exception as e:
+            logger.error(f"Ошибка регенерации: {e}")
+            await event.message.answer("🐾 Гав! Что-то пошло не так. Попробуй позже.")
 
     def _format_opinion(self, opinion, movie_name, movie_year, movie_id):
         kp_url = f"https://www.kinopoisk.ru/film/{movie_id}/"
         title_with_link = f"<a href='{kp_url}'><b>{movie_name}</b></a> ({movie_year})"
         return f"Я посмотрела {title_with_link}, и вот что думаю:\n\n{opinion}\n\n🐾"
 
-    async def _generate_opinion(self, movie_details):
+    async def _generate_opinion(self, movie_details, force_regenerate=False):
         title = movie_details.get('name', 'Без названия')
         year = movie_details.get('year', '')
         
@@ -1538,6 +1630,9 @@ class MaxAdapter:
 Настроение: 5 хэштегов (например #Радость #Грусть #Вдохновение #Ностальгия #Уют)
 Атмосфера: 5 хэштегов (например #Мрачность #Яркость #Теплота #Напряжение #Сюрреализм)"""
 
+        if force_regenerate:
+            prompt += "\n\n⚠️ Это свежий взгляд на тот же фильм. Постарайся найти новые детали, которые не упоминались в предыдущем мнении. Сделай акцент на других аспектах фильма, персонажах, режиссёрских приёмах или скрытых смыслах. Не повторяй то, что уже было сказано."
+
         response = ai_client.chat.completions.create(
             model="deepseek-chat",
             messages=[
@@ -1565,7 +1660,7 @@ class MaxAdapter:
 
     # ==================== ЗАПУСК ====================
     async def run(self):
-        logger.info("🚀 MaxAdapter запущен (с КиноЛогово)")
+        logger.info("🚀 MaxAdapter запущен (со Свежим взглядом)")
         await self.bot.delete_webhook()
         await self.dp.start_polling(self.bot)
 
