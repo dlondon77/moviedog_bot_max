@@ -495,7 +495,67 @@ def format_filter_keyboard(query, current_filters=None, total_count=0, has_more=
     """
     return None
 
-# core/movie.py — добавить в конец
+def add_favorite_movie(user_id, movie_id):
+    """Добавляет фильм в любимые"""
+    conn = db.get_opinions_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute('''
+            INSERT OR IGNORE INTO favorite_movies (user_id, movie_id, added_at)
+            VALUES (?, ?, ?)
+        ''', (user_id, movie_id, datetime.now().isoformat()))
+        conn.commit()
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка добавления в любимые: {e}")
+        return False
+    finally:
+        conn.close()
+
+def remove_favorite_movie(user_id, movie_id):
+    """Удаляет фильм из любимых"""
+    conn = db.get_opinions_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute('''
+            DELETE FROM favorite_movies 
+            WHERE user_id = ? AND movie_id = ?
+        ''', (user_id, movie_id))
+        conn.commit()
+        return cursor.rowcount > 0
+    except Exception as e:
+        logger.error(f"Ошибка удаления из любимых: {e}")
+        return False
+    finally:
+        conn.close()
+
+def is_favorite(user_id, movie_id):
+    """Проверяет, есть ли фильм в любимых"""
+    conn = db.get_opinions_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT 1 FROM favorite_movies 
+        WHERE user_id = ? AND movie_id = ?
+    ''', (user_id, movie_id))
+    result = cursor.fetchone()
+    conn.close()
+    return result is not None
+
+def get_favorite_movies(user_id, limit=10, offset=0):
+    """Получает список любимых фильмов"""
+    conn = db.get_opinions_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT fm.movie_id, fm.added_at, m.name, m.year, m.rating
+        FROM favorite_movies fm
+        JOIN movies m ON fm.movie_id = m.id
+        WHERE fm.user_id = ?
+        ORDER BY fm.added_at DESC
+        LIMIT ? OFFSET ?
+    ''', (user_id, limit, offset))
+    movies = cursor.fetchall()
+    conn.close()
+    return [{'movie_id': row[0], 'added_at': row[1], 'name': row[2], 'year': row[3], 'rating': row[4]} for row in movies]
 
 def search_movies_by_description(query: str, limit: int = 5) -> list:
     """Ищет фильмы по ключевым словам в описании"""
