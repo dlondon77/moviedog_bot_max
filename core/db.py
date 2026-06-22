@@ -239,25 +239,31 @@ def init_db():
                 )
             ''')
 
-            # ================== Любимые фильмы ==================
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS favorite_movies (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    user_id INTEGER NOT NULL,
-                    movie_id INTEGER NOT NULL,
-                    added_at TEXT NOT NULL,
-                    FOREIGN KEY (user_id) REFERENCES users (user_id),
-                    FOREIGN KEY (movie_id) REFERENCES movies (movie_id),
-                    UNIQUE(user_id, movie_id)
-                )
-            ''')
-            
-            cursor.execute('''
-                CREATE INDEX IF NOT EXISTS idx_favorite_movies_user_id ON favorite_movies(user_id)
-            ''')
-            cursor.execute('''
-                CREATE INDEX IF NOT EXISTS idx_favorite_movies_movie_id ON favorite_movies(movie_id)
-            ''')
+            # ================== Таблица любимых фильмов ==================
+            # Проверяем, существует ли таблица favorite_movies
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='favorite_movies'")
+            if not cursor.fetchone():
+                logger.info("🔄 Создаём таблицу favorite_movies...")
+                cursor.execute('''
+                    CREATE TABLE favorite_movies (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        user_id INTEGER NOT NULL,
+                        movie_id INTEGER NOT NULL,
+                        added_at TEXT NOT NULL,
+                        FOREIGN KEY (user_id) REFERENCES users (user_id),
+                        UNIQUE(user_id, movie_id)
+                    )
+                ''')
+                cursor.execute('''
+                    CREATE INDEX idx_favorite_movies_user_id ON favorite_movies(user_id)
+                ''')
+                cursor.execute('''
+                    CREATE INDEX idx_favorite_movies_movie_id ON favorite_movies(movie_id)
+                ''')
+                conn.commit()
+                logger.info("✅ Таблица favorite_movies создана")
+            else:
+                logger.info("✅ Таблица favorite_movies уже существует")
                         
             opinions_conn.commit()
             logger.info("✅ База opinions.db успешно инициализирована")
