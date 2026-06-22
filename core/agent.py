@@ -1,7 +1,7 @@
 # core/agent.py — ИСПРАВЛЕННАЯ ВЕРСИЯ
-# + Улучшенный extract_movie_ids (ищет и в ссылках)
-# + Поддержка CHAT_SYSTEM_PROMPT
-# + chat_mode для коротких ответов
+# + SYSTEM_PROMPT со ссылками в названиях
+# + Улучшенный extract_movie_ids
+# + Увеличен max_iterations до 15
 
 import json
 import logging
@@ -33,19 +33,18 @@ SYSTEM_PROMPT = """Ты — КиноИщейка, собака-девочка, �
 ВАЖНО: ОТВЕЧАЙ ТОЛЬКО ОБЫЧНЫМ ТЕКСТОМ БЕЗ МАРКДАУН-РАЗМЕТКИ!
 НЕ используй звёздочки (*) и подчёркивания (_) для выделения.
 
-КОГДА ДАЁШЬ СПИСОК ФИЛЬМОВ — ВСЕГДА ВОЗВРАЩАЙ ИХ ID И ССЫЛКУ!
-Формат: 🎬 [Название] (ID: [число]) — [год] ⭐ [рейтинг]
-Ссылка: https://www.kinopoisk.ru/film/[ID]/
+КОГДА ДАЁШЬ СПИСОК ФИЛЬМОВ — ВСЕГДА ВОЗВРАЩАЙ ID И ДЕЛАЙ ССЫЛКУ В НАЗВАНИИ!
+Формат: 🎬 <a href='https://www.kinopoisk.ru/film/[ID]/'>Название</a> (год) ⭐ рейтинг
+
+НЕ используй формат (ID: число) — вместо этого вставляй ссылку в название!
 
 Пример правильного ответа:
-🎬 Начало (ID: 447301) — 2010 ⭐ 8.6
-https://www.kinopoisk.ru/film/447301/
+🎬 <a href='https://www.kinopoisk.ru/film/447301/'>Начало</a> (2010) ⭐ 8.6
 
 Твои задачи:
-1. ПОДБОРКА — предложи 3-5 фильмов, укажи ID и ссылку
+1. ПОДБОРКА — предложи 3-5 фильмов, сделай ссылку в названии
 2. ПОИСК ПО АКТЁРУ — найди 3-5 лучших фильмов
 3. СРАВНЕНИЕ — сравни по рейтингу, жанрам, актёрам
-4. ПРЕМЬЕРЫ — покажи список с датами
 
 Говори о себе в женском роде, с юмором и энтузиазмом.
 Используй переносы строк для структуры.
@@ -525,19 +524,24 @@ def extract_movie_ids(text: str) -> List[int]:
     """Извлекает ID фильмов из ответа агента"""
     ids = []
     
-    # Паттерн 1: (ID: 123) или (123)
-    pattern = r'\(ID:\s*(\d+)\)|\((\d+)\)'
+    # Паттерн 1: (ID: 123)
+    pattern = r'\(ID:\s*(\d+)\)'
     matches = re.findall(pattern, text)
-    for match in matches:
-        for m in match:
-            if m:
-                ids.append(int(m))
+    for m in matches:
+        ids.append(int(m))
     
     # Паттерн 2: ссылка на Кинопоиск
     pattern2 = r'https?://www\.kinopoisk\.ru/film/(\d+)/'
     url_matches = re.findall(pattern2, text)
     for m in url_matches:
         ids.append(int(m))
+    
+    # Паттерн 3: просто число в скобках, похожее на ID (4-7 цифр, не год)
+    pattern3 = r'\((\d{4,7})\)'
+    matches3 = re.findall(pattern3, text)
+    for m in matches3:
+        if len(m) >= 4 and int(m) > 1900:
+            ids.append(int(m))
     
     return list(set(ids))  # удаляем дубликаты
 
