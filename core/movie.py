@@ -310,7 +310,7 @@ def get_premier_movies_from_db() -> list:
         conn.close()
 
 def format_movie_card(movie, is_premiers=False, query=None, is_person_search=False):
-    """Форматирует карточку фильма для отправки пользователю (без кнопок)"""
+    """Форматирует карточку фильма для отправки пользователю (без ссылки в названии)"""
     if not movie or not isinstance(movie, dict):
         return None, None
 
@@ -338,7 +338,7 @@ def format_movie_card(movie, is_premiers=False, query=None, is_person_search=Fal
         genres = ', '.join(movie.get('genres', [])) if movie.get('genres') else 'отсутствует'
         description = movie.get('description', 'отсутствует') or 'отсутствует'
         
-        # ===== РЕЖИССЕРЫ (ВСЕ) =====
+        # Получаем всех режиссёров
         directors_list = []
         for director in movie.get('directors', []):
             director_name = director.get('name', '') or director.get('enName', '')
@@ -352,7 +352,7 @@ def format_movie_card(movie, is_premiers=False, query=None, is_person_search=Fal
         
         directors = ', '.join(directors_list) if directors_list else 'отсутствует'
         
-        # ===== АКТЁРЫ (ВСЕ) =====
+        # Актеры (все)
         actors_list = []
         for actor in movie.get('actors', []):
             actor_name = actor.get('name', '') or actor.get('enName', '')
@@ -394,20 +394,20 @@ def format_movie_card(movie, is_premiers=False, query=None, is_person_search=Fal
         poster_url = movie.get('poster_url', f"https://st.kp.yandex.net/images/film_big/{movie_id}.jpg")
         kp_url = f"https://www.kinopoisk.ru/film/{movie_id}/" if movie_id else "https://www.kinopoisk.ru/"
         
-        # ===== КАРТОЧКА С ОТСТУПАМИ =====
+        # ===== КАРТОЧКА БЕЗ ССЫЛКИ В НАЗВАНИИ =====
         card = (
-            f"🎬 <a href='{kp_url}'><b>{title}</b></a> {year_display}\n"
+            f"🎬 <b>{title}</b> {year_display}\n"
             f"📁 Тип: <b>{type_text}</b>\n"
             f"⭐ Рейтинг Кинопоиска: <b>{rating}</b>\n"
             f"🌍 Страна: <b>{countries}</b>\n"
             f"🎭 Жанр: <b>{genres}</b>\n"
             f"{premiere_info}\n"  # ← пустая строка перед описанием
-            f"📝 <b>Описание:</b>\n<i>{description}</i>\n\n"  # ← отдельная строка с описанием
+            f"📝 <b>Описание:</b>\n<i>{description}</i>\n\n"
             f"🎥 <b>Режиссер:</b> {directors}\n"
-            f"👥 <b>Актеры:</b> {actors}\n"
+            f"👥 <b>Актеры:</b> {actors}\n\n"
+            f"🔗 <a href='{kp_url}'>Кинопоиск</a>"
         )
         
-        # Для Max возвращаем None вместо клавиатуры (кнопки добавляются в адаптере)
         return card, None
         
     except Exception as e:
