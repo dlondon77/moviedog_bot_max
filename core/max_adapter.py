@@ -1,9 +1,10 @@
-# core/max_adapter.py — ИТОГОВАЯ ВЕРСИЯ
-# + Премьеры с выбором месяца + года
-# + Подборки 3-5 фильмов
-# + Кнопка "Показать карточки (N)"
-# + Ссылки в карточках и мнениях
-# + Профиль с заглушками
+# core/max_adapter.py — ИСПРАВЛЕННАЯ ВЕРСИЯ
+# + Профиль — кнопки прилеплены
+# + Мнение — кнопки друг под другом
+# + Карточка — ссылка в конце
+# + Подборки — ссылки в названиях, кнопки прилеплены
+# + Пообщаться — фикс автоудаления
+# + ADMIN_IDS из переменных окружения
 
 import logging
 import configparser
@@ -29,7 +30,12 @@ from openai import OpenAI
 import httpx
 
 # ==================== КОНСТАНТЫ ====================
-ADMIN_IDS = [7191208]
+# Читаем ADMIN_IDS из переменных окружения
+ADMIN_IDS_STR = os.environ.get("ADMIN_IDS", "")
+ADMIN_IDS = [int(id.strip()) for id in ADMIN_IDS_STR.split(",") if id.strip().isdigit()]
+if not ADMIN_IDS:
+    ADMIN_IDS = [7191208]  # fallback для разработки
+logger.info(f"👑 ADMIN_IDS: {ADMIN_IDS}")
 
 # ==================== ИМПОРТЫ ИЗ CORE ====================
 import user as user_module
@@ -387,31 +393,28 @@ def _format_opinion_with_buttons(opinion, movie_name, movie_year, movie_id, sour
             {"type": "callback", "text": "🔄 Свежий взгляд", "payload": f"regenerate_{movie_id}_{source}"}
         ])
     
-    # Кнопки в зависимости от источника
+    # 👇 КНОПКИ ДРУГ ПОД ДРУГОМ
     if source == "random":
         buttons.append([
-            {"type": "callback", "text": "🎲 Ещё случайный", "payload": "random"},
-            {"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}
+            {"type": "callback", "text": "🎲 Ещё случайный", "payload": "random"}
         ])
     elif source == "search":
         buttons.append([
-            {"type": "callback", "text": "🔄 Ещё поиск", "payload": "search"},
-            {"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}
+            {"type": "callback", "text": "🔄 Ещё поиск", "payload": "search"}
         ])
     elif source == "person":
         buttons.append([
-            {"type": "callback", "text": "🔄 Ещё поиск по персонам", "payload": "person"},
-            {"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}
+            {"type": "callback", "text": "🔄 Ещё поиск по персонам", "payload": "person"}
         ])
     elif source == "premiers":
         buttons.append([
-            {"type": "callback", "text": "🔄 Ещё премьеры", "payload": "premiers"},
-            {"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}
+            {"type": "callback", "text": "🔄 Ещё премьеры", "payload": "premiers"}
         ])
-    else:
-        buttons.append([
-            {"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}
-        ])
+    
+    # Кнопка "В главное меню" всегда отдельно
+    buttons.append([
+        {"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}
+    ])
     
     keyboard = InlineKeyboardMarkup(buttons)
     return text, keyboard
@@ -612,16 +615,13 @@ class MaxAdapter:
         # ===== ПРЕМЬЕРЫ ПО МЕСЯЦАМ И ГОДАМ =====
         if payload.startswith("premiers_month_"):
             month = int(payload.split("_")[2])
-            # По умолчанию берём текущий год
             year = datetime.now().year
             await self._handle_premiers_by_month(event, user_id, month, year)
             return
 
         if payload.startswith("premiers_year_"):
             year = int(payload.split("_")[2])
-            # Сохраняем выбранный год в контексте
             self._get_user_context(user_id)['premiers_year'] = year
-            # Обновляем клавиатуру с подсветкой
             await event.message.answer(
                 "📅 <b>Выбери месяц для премьер:</b>",
                 parse_mode="html",
@@ -726,9 +726,14 @@ class MaxAdapter:
                 "❤️ <b>Любимые фильмы</b>\n\n"
                 "Эта функция скоро появится!\n"
                 "Ты сможешь сохранять фильмы в любимые и возвращаться к ним в любой момент.",
-                parse_mode="html",
-                attachments=[get_action_keyboard(None, None, None)]
+                parse_mode="html"
             )
+            # 👇 КНОПКИ ПРИЛЕПЛЕНЫ
+            buttons = [
+                [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
+            ]
+            keyboard = InlineKeyboardMarkup(buttons)
+            await event.message.answer("👇 Что дальше?", attachments=[keyboard])
             return
 
         if payload == "feedback_soon":
@@ -736,9 +741,13 @@ class MaxAdapter:
                 "📝 <b>Мои обращения</b>\n\n"
                 "Эта функция скоро появится!\n"
                 "Ты сможешь видеть все свои обращения к тренерам и их ответы.",
-                parse_mode="html",
-                attachments=[get_action_keyboard(None, None, None)]
+                parse_mode="html"
             )
+            buttons = [
+                [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
+            ]
+            keyboard = InlineKeyboardMarkup(buttons)
+            await event.message.answer("👇 Что дальше?", attachments=[keyboard])
             return
 
         # ===== FAQ =====
@@ -850,7 +859,6 @@ class MaxAdapter:
         
         premiers_list = get_premier_movies_from_db()
         
-        # Фильтруем по месяцу и году
         filtered = []
         for movie in premiers_list:
             premiere_date = movie.get('premiere_russia') or movie.get('premiere_world')
@@ -1263,6 +1271,7 @@ class MaxAdapter:
             parse_mode="html"
         )
         
+        # 👇 КНОПКИ ПРИЛЕПЛЕНЫ
         buttons = [
             [{"type": "callback", "text": "❤️ Любимые фильмы (скоро)", "payload": "favorites_soon"}],
             [{"type": "callback", "text": "📝 Мои обращения (скоро)", "payload": "feedback_soon"}],
@@ -1345,9 +1354,10 @@ class MaxAdapter:
                 await asyncio.sleep(2)
                 try:
                     await thinking_msg.delete()
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"Не удалось удалить сообщение: {e}")
             
+            # 👇 СОЗДАЁМ ЗАДАЧУ НА УДАЛЕНИЕ
             asyncio.create_task(delete_after_delay())
             
             enhanced_query = f"Ответь коротко (2-3 предложения) и интересно: {query}"
@@ -1528,12 +1538,13 @@ class MaxAdapter:
             context['movies'] = movies_list
             context['query'] = f'{action_name}: {query[:30]}...'
             
-            # Кнопка с точным количеством
-            keyboard = InlineKeyboardMarkup([
+            # 👇 КНОПКИ ПРИЛЕПЛЕНЫ В ОДНОМ СООБЩЕНИИ
+            buttons = [
                 [{"type": "callback", "text": f"🎬 Показать карточки ({len(movies_list)})", "payload": "agent_show_cards"}],
                 [{"type": "callback", "text": f"🔄 Ещё {action_name}", "payload": action_payload}],
                 [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
-            ])
+            ]
+            keyboard = InlineKeyboardMarkup(buttons)
             await event.message.answer(
                 "👇 Хочешь посмотреть карточки этих фильмов?",
                 attachments=[keyboard]
