@@ -1,9 +1,10 @@
-# core/max_adapter.py — ПОЛНАЯ ВЕРСИЯ (БЕЗ PAYMENT)
+# core/max_adapter.py — ПОЛНАЯ ВЕРСИЯ
+# + Любимые фильмы перенесены в Профиль
+# + Мои обращения перенесены в Профиль
+# + Добавлены заглушки в Профиль
 # + Исправлены премьеры (выбор месяца)
 # + Исправлены ссылки в подборках и карточках
-# + Исправлены любимые фильмы
-# + Исправлен профиль
-# + ВСЁ, ЧТО СВЯЗАНО С PAYMENT — УДАЛЕНО
+# + Исправлен метод run()
 
 import logging
 import configparser
@@ -155,6 +156,21 @@ def save_feedback(user_id, feedback_type, movie_id, message):
     conn.commit()
     conn.close()
 
+def get_user_feedback(user_id: int, limit: int = 10, offset: int = 0) -> list:
+    """Получает список обращений пользователя"""
+    conn = db_module.get_opinions_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT id, type, movie_id, message, status, created_at, admin_comment
+        FROM feedback 
+        WHERE user_id = ? AND status != 'archive'
+        ORDER BY created_at DESC
+        LIMIT ? OFFSET ?
+    ''', (user_id, limit, offset))
+    result = cursor.fetchall()
+    conn.close()
+    return result
+
 # ==================== КОНФИГ И DEEPSEEK ====================
 def load_config():
     config_path = os.path.join(BASE_DIR, 'config', 'config.ini')
@@ -209,11 +225,27 @@ def get_main_menu():
         ],
         [
             {"type": "callback", "text": "👤 Мой профиль", "payload": "profile"},
-            {"type": "callback", "text": "❤️ Любимые фильмы", "payload": "favorites"}
+            {"type": "callback", "text": "❓ FAQ", "payload": "faq"}
         ],
         [
-            {"type": "callback", "text": "❓ FAQ", "payload": "faq"},
             {"type": "callback", "text": "📝 Обратная связь", "payload": "feedback"}
+        ]
+    ]
+    return InlineKeyboardMarkup(buttons)
+
+def get_profile_menu(user_id: int):
+    """Меню профиля с разделами"""
+    buttons = [
+        [
+            {"type": "callback", "text": "❤️ Любимые фильмы", "payload": "favorites"},
+            {"type": "callback", "text": "📋 Мои обращения", "payload": "feedback_list"}
+        ],
+        [
+            {"type": "callback", "text": "📊 Статистика", "payload": "profile_stats"},
+            {"type": "callback", "text": "💰 Тарифы", "payload": "tariff_info"}
+        ],
+        [
+            {"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}
         ]
     ]
     return InlineKeyboardMarkup(buttons)
@@ -269,9 +301,6 @@ def get_feedback_menu():
             {"type": "callback", "text": "📢 Оставить отзыв", "payload": "feedback_review"}
         ],
         [
-            {"type": "callback", "text": "📋 Мои обращения", "payload": "feedback_list"}
-        ],
-        [
             {"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}
         ]
     ]
@@ -293,19 +322,16 @@ def get_faq_menu():
     ]
     return InlineKeyboardMarkup(buttons)
 
-def get_feedback_pagination_buttons(page: int, total_pages: int):
+def get_feedback_pagination_buttons(page: int, total_pages: int, prefix: str = "fb"):
     buttons = []
     row = []
     if page > 0:
-        row.append({"type": "callback", "text": "⬅️ Назад", "payload": f"fb_page_{page-1}"})
+        row.append({"type": "callback", "text": "⬅️ Назад", "payload": f"{prefix}_page_{page-1}"})
     row.append({"type": "callback", "text": f"Стр. {page+1} из {total_pages}", "payload": "noop"})
     if page < total_pages - 1:
-        row.append({"type": "callback", "text": "Вперёд ➡️", "payload": f"fb_page_{page+1}"})
+        row.append({"type": "callback", "text": "Вперёд ➡️", "payload": f"{prefix}_page_{page+1}"})
     if row:
         buttons.append(row)
-    buttons.append([
-        {"type": "callback", "text": "📝 В меню обратной связи", "payload": "feedback_back"}
-    ])
     buttons.append([
         {"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}
     ])
@@ -704,6 +730,14 @@ class MaxAdapter:
             await self._send_profile(event.message.answer, user_id)
             return
 
+        if payload == "profile_stats":
+            await self._handle_profile_stats(event, user_id)
+            return
+
+        if payload == "tariff_info":
+            await self._handle_tariff_info(event, user_id)
+            return
+
         # ===== МЕНЮ КиноЛогово =====
         if payload == "agent_menu":
             await event.message.answer(
@@ -905,7 +939,8 @@ class MaxAdapter:
         if not favorites:
             await event.message.answer(
                 "🐾 У тебя пока нет любимых фильмов.\n\n"
-                "Чтобы добавить фильм, нажми кнопку «❤️ В любимые» под карточкой фильма!"
+                "Чтобы добавить фильм, нажми кнопку «❤️ В любимые» под карточкой фильма!",
+                attachments=[get_profile_menu(user_id)]
             )
             return
         
@@ -917,11 +952,7 @@ class MaxAdapter:
         
         text += f"\n🐾 Всего {len(favorites)} фильмов"
         
-        buttons = [
-            [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
-        ]
-        keyboard = InlineKeyboardMarkup(buttons)
-        await event.message.answer(text, parse_mode="html", attachments=[keyboard])
+        await event.message.answer(text, parse_mode="html", attachments=[get_profile_menu(user_id)])
 
     async def _handle_favorite_add(self, event, user_id, movie_id):
         if add_favorite(user_id, movie_id):
@@ -993,15 +1024,38 @@ class MaxAdapter:
             f"• Свежих взглядов: {regeneration_text}\n"
             f"❤️ Любимых фильмов: {favorites_count}\n\n"
             f"📅 Действует до: {limits['tariff_end_date'][:10]}\n\n"
-            f"🐾 Лимиты обновляются в полночь!"
+            f"🐾 Лимиты обновляются в полночь!\n\n"
+            f"⬇️ <b>Выбери раздел в меню ниже:</b>"
         )
         
-        buttons = [
-            [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
-        ]
-        keyboard = InlineKeyboardMarkup(buttons)
-        
-        await send_func(text, parse_mode="html", attachments=[keyboard])
+        await send_func(text, parse_mode="html", attachments=[get_profile_menu(user_id)])
+
+    async def _handle_profile_stats(self, event, user_id):
+        """Заглушка для статистики"""
+        text = (
+            "📊 <b>Статистика</b> — в разработке 🚧\n\n"
+            "Здесь ты сможешь увидеть:\n"
+            "• Количество просмотренных фильмов\n"
+            "• Самые популярные жанры\n"
+            "• Активность по дням\n"
+            "• И многое другое!\n\n"
+            "🐾 Скоро появится!"
+        )
+        await event.message.answer(text, parse_mode="html", attachments=[get_profile_menu(user_id)])
+
+    async def _handle_tariff_info(self, event, user_id):
+        """Заглушка для тарифов"""
+        limits = get_user_limits(user_id)
+        text = (
+            "💰 <b>Тарифы</b> — скоро! 🚧\n\n"
+            "Сейчас доступен только бесплатный тариф «Щенячий азарт».\n\n"
+            "В ближайшее время появятся платные тарифы:\n"
+            "🐕 <b>Охотничий</b> — 199 ₽/мес\n"
+            "🕵️ <b>Ищейка</b> — 399 ₽/мес\n"
+            "🐺 <b>Вожак</b> — 999 ₽/мес\n\n"
+            "Следи за обновлениями! 🐾"
+        )
+        await event.message.answer(text, parse_mode="html", attachments=[get_profile_menu(user_id)])
 
     # ==================== ПОИСК И ПАГИНАЦИЯ ====================
     async def _perform_search(self, event, user_id, query):
@@ -1481,25 +1535,25 @@ class MaxAdapter:
 
     async def _show_user_feedback(self, event, user_id, page=0):
         items_per_page = 5
-        conn = db_module.get_opinions_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT id, type, movie_id, message, status, created_at, admin_comment
-            FROM feedback 
-            WHERE user_id = ? AND status != 'archive'
-            ORDER BY created_at DESC
-        ''', (user_id,))
-        all_feedback = cursor.fetchall()
-        conn.close()
+        all_feedback = get_user_feedback(user_id, limit=items_per_page * 10, offset=page * items_per_page)
         
         if not all_feedback:
             await event.message.answer(
                 "🐾 У тебя пока нет обращений.",
-                attachments=[get_feedback_menu()]
+                attachments=[get_profile_menu(user_id)]
             )
             return
         
-        total_items = len(all_feedback)
+        # Для пагинации получаем общее количество
+        conn = db_module.get_opinions_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT COUNT(*) FROM feedback 
+            WHERE user_id = ? AND status != 'archive'
+        ''', (user_id,))
+        total_items = cursor.fetchone()[0]
+        conn.close()
+        
         total_pages = (total_items + items_per_page - 1) // items_per_page
         if page >= total_pages:
             page = total_pages - 1
@@ -1529,7 +1583,7 @@ class MaxAdapter:
                 text += f"📝 Ответ: {comment[:100]}\n"
             text += "\n"
         
-        pagination = get_feedback_pagination_buttons(page, total_pages)
+        pagination = get_feedback_pagination_buttons(page, total_pages, "fb")
         await event.message.answer(text, parse_mode="html", attachments=[pagination])
 
     # ==================== FAQ ====================
@@ -2012,4 +2066,10 @@ class MaxAdapter:
     # ==================== RUN ====================
     async def run(self):
         logger.info("🚀 Запускаю MaxAdapter...")
-        await self.dp.start_polling(self.bot)
+        try:
+            await self.dp.start_polling(self.bot)
+        except KeyboardInterrupt:
+            logger.info("👋 Остановка по Ctrl+C")
+        except Exception as e:
+            logger.error(f"❌ Ошибка в работе бота: {e}")
+            raise
