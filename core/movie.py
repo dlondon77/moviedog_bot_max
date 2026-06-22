@@ -495,6 +495,40 @@ def format_filter_keyboard(query, current_filters=None, total_count=0, has_more=
     """
     return None
 
+# core/movie.py — добавить в конец
+
+def search_movies_by_description(query: str, limit: int = 5) -> list:
+    """Ищет фильмы по ключевым словам в описании"""
+    conn = db.get_movies_db_connection()
+    cursor = conn.cursor()
+    
+    words = [w.lower() for w in query.split() if len(w) > 3]
+    
+    if not words:
+        conn.close()
+        return []
+    
+    conditions = []
+    params = []
+    for word in words:
+        conditions.append("(LOWER(description) LIKE ? OR LOWER(name) LIKE ?)")
+        params.extend([f"%{word}%", f"%{word}%"])
+    
+    sql = f"""
+    SELECT DISTINCT id
+    FROM movies
+    WHERE {' OR '.join(conditions)}
+    ORDER BY rating DESC
+    LIMIT ?
+    """
+    params.append(limit)
+    
+    cursor.execute(sql, params)
+    movie_ids = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    
+    return [get_movie_details(movie_id) for movie_id in movie_ids if movie_id]
+
 def search_persons(query: str, limit=20, partial_match=True):
     """Ищет актёров и режиссёров по имени
     
