@@ -1,9 +1,9 @@
-# core/max_adapter.py — ИСПРАВЛЕННАЯ ВЕРСИЯ
-# + Свежий взгляд — прямо под мнением
-# + Премьеры — исправлен обработчик
-# + Актёрский нюх и По сюжету — увеличен таймаут
-# + Кнопка "Карточки" — прилеплена к подборкам
-# + Пообщаться — автоудаление "Дай-ка подумаю..."
+# core/max_adapter.py — ИТОГОВАЯ ВЕРСИЯ
+# + Премьеры с выбором месяца + года
+# + Подборки 3-5 фильмов
+# + Кнопка "Показать карточки (N)"
+# + Ссылки в карточках и мнениях
+# + Профиль с заглушками
 
 import logging
 import configparser
@@ -11,7 +11,7 @@ import os
 import sys
 import re
 import asyncio
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CORE_DIR = os.path.join(BASE_DIR, 'core')
@@ -315,19 +315,39 @@ def get_filter_keyboard(query, filters, total_count, has_more):
     return InlineKeyboardMarkup(buttons)
 
 
-def get_month_keyboard():
-    """Клавиатура для выбора месяца (премьеры)"""
+def get_premiers_month_keyboard():
+    """Клавиатура для выбора месяца и года (премьеры)"""
+    current_year = datetime.now().year
+    current_month = datetime.now().month
+    
     month_names = {
         1: "Янв", 2: "Фев", 3: "Мар", 4: "Апр",
         5: "Май", 6: "Июн", 7: "Июл", 8: "Авг",
         9: "Сен", 10: "Окт", 11: "Ноя", 12: "Дек"
     }
+    
     buttons = []
+    
+    # Строка с выбором года
+    year_buttons = []
+    for y in range(current_year - 1, current_year + 2):
+        label = f"{y}" + (" ✅" if y == current_year else "")
+        year_buttons.append({
+            "type": "callback",
+            "text": label[:4],
+            "payload": f"premiers_year_{y}"
+        })
+    buttons.append(year_buttons)
+    
+    # Строки с месяцами
     row = []
     for month in range(1, 13):
+        label = month_names[month]
+        if month == current_month:
+            label = f"✅ {label}"
         row.append({
             "type": "callback",
-            "text": month_names[month],
+            "text": label,
             "payload": f"premiers_month_{month}"
         })
         if len(row) == 4:
@@ -335,6 +355,7 @@ def get_month_keyboard():
             row = []
     if row:
         buttons.append(row)
+    
     buttons.append([
         {"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}
     ])
@@ -356,9 +377,8 @@ def _format_opinion_with_buttons(opinion, movie_name, movie_year, movie_id, sour
     kp_url = f"https://www.kinopoisk.ru/film/{movie_id}/"
     title_with_link = f"<a href='{kp_url}'><b>{movie_name}</b></a> ({movie_year})"
     
-    text = f"🐾 Я посмотрела {title_with_link}, и вот что думаю:\n\n{opinion}\n\n"
+    text = f"🐾 Я посмотрела {title_with_link}, и вот что думаю:\n\n{opinion}\n\n🔗 {kp_url}\n\n🐾"
     
-    # Добавляем кнопки как текст (они будут в attachments)
     buttons = []
     
     # Свежий взгляд — только для премиум
@@ -410,7 +430,7 @@ class MaxAdapter:
         self.user_context = {}
 
         self._register_handlers()
-        logger.info("✅ MaxAdapter инициализирован (исправленная версия)")
+        logger.info("✅ MaxAdapter инициализирован (итоговая версия)")
 
     def _register_handlers(self):
         @self.dp.bot_started()
@@ -437,9 +457,9 @@ class MaxAdapter:
         @self.dp.message_created(F.message.body.text == "/premiers")
         async def on_premiers(event: MessageCreated):
             await event.message.answer(
-                "📅 <b>Выбери месяц для премьер:</b>",
+                "📅 <b>Выбери месяц и год для премьер:</b>",
                 parse_mode="html",
-                attachments=[get_month_keyboard()]
+                attachments=[get_premiers_month_keyboard()]
             )
 
         @self.dp.message_created(F.message.body.text == "/person")
@@ -558,7 +578,7 @@ class MaxAdapter:
             "<b>Вот что я умею:</b>\n\n"
             "🎲 <b>Случайный фильм</b> — найду следы случайного фильма\n"
             "🔍 <b>Поиск</b> — найду отборные фильмы по названию (с фильтрами!)\n"
-            "🎉 <b>Премьеры</b> — выбирай месяц и смотри премьеры\n"
+            "🎉 <b>Премьеры</b> — выбирай месяц и год, смотри премьеры\n"
             "🎭 <b>Поиск по персонам</b> — найду фильмы по имени актёра или режиссёра\n"
             "🐾 <b>Мнение о фильме</b> — расскажу о смысле фильма, его настроении и атмосфере\n"
             "🔄 <b>Свежий взгляд</b> — перегенерирую мнение (для тарифов Ищейка и Вожак)\n"
@@ -589,10 +609,24 @@ class MaxAdapter:
             except AttributeError:
                 pass
 
-        # ===== ПРЕМЬЕРЫ ПО МЕСЯЦАМ (ДО ВСЕХ ПРОВЕРОК!) =====
+        # ===== ПРЕМЬЕРЫ ПО МЕСЯЦАМ И ГОДАМ =====
         if payload.startswith("premiers_month_"):
             month = int(payload.split("_")[2])
-            await self._handle_premiers_by_month(event, user_id, month)
+            # По умолчанию берём текущий год
+            year = datetime.now().year
+            await self._handle_premiers_by_month(event, user_id, month, year)
+            return
+
+        if payload.startswith("premiers_year_"):
+            year = int(payload.split("_")[2])
+            # Сохраняем выбранный год в контексте
+            self._get_user_context(user_id)['premiers_year'] = year
+            # Обновляем клавиатуру с подсветкой
+            await event.message.answer(
+                "📅 <b>Выбери месяц для премьер:</b>",
+                parse_mode="html",
+                attachments=[get_premiers_month_keyboard()]
+            )
             return
 
         # ===== МЕНЮ КиноЛогово =====
@@ -684,6 +718,27 @@ class MaxAdapter:
         # ===== АГЕНТ — ПОКАЗ КАРТОЧЕК =====
         if payload == "agent_show_cards":
             await self._handle_agent_show_cards(event, user_id)
+            return
+
+        # ===== ЗАГЛУШКИ В ПРОФИЛЕ =====
+        if payload == "favorites_soon":
+            await event.message.answer(
+                "❤️ <b>Любимые фильмы</b>\n\n"
+                "Эта функция скоро появится!\n"
+                "Ты сможешь сохранять фильмы в любимые и возвращаться к ним в любой момент.",
+                parse_mode="html",
+                attachments=[get_action_keyboard(None, None, None)]
+            )
+            return
+
+        if payload == "feedback_soon":
+            await event.message.answer(
+                "📝 <b>Мои обращения</b>\n\n"
+                "Эта функция скоро появится!\n"
+                "Ты сможешь видеть все свои обращения к тренерам и их ответы.",
+                parse_mode="html",
+                attachments=[get_action_keyboard(None, None, None)]
+            )
             return
 
         # ===== FAQ =====
@@ -790,25 +845,25 @@ class MaxAdapter:
             await event.message.answer(f"🐾 Хм... Я не поняла, что ты хочешь. Давай начнём сначала — выбери кнопку в меню!")
 
     # ==================== ПРЕМЬЕРЫ ПО МЕСЯЦАМ ====================
-    async def _handle_premiers_by_month(self, event, user_id, month):
-        await event.message.answer(f"📅 Загружаю премьеры за {month} месяц...")
+    async def _handle_premiers_by_month(self, event, user_id, month, year):
+        await event.message.answer(f"📅 Загружаю премьеры за {month}.{year}...")
         
         premiers_list = get_premier_movies_from_db()
         
-        # Фильтруем по месяцу
+        # Фильтруем по месяцу и году
         filtered = []
         for movie in premiers_list:
             premiere_date = movie.get('premiere_russia') or movie.get('premiere_world')
             if premiere_date:
                 try:
                     d = datetime.strptime(premiere_date[:10], "%Y-%m-%d")
-                    if d.month == month:
+                    if d.month == month and d.year == year:
                         filtered.append(movie)
                 except:
                     pass
         
         if not filtered:
-            await event.message.answer(f"😢 Нет премьер за этот месяц.")
+            await event.message.answer(f"😢 Нет премьер за {month}.{year}.")
             return
         
         context = self._get_user_context(user_id)
@@ -1201,10 +1256,20 @@ class MaxAdapter:
             f"📊 <b>Лимиты на сегодня:</b>\n"
             f"• Мнений: {stats['opinion_count']}/{limits['opinion_limit']}\n"
             f"• Свежих взглядов: {regeneration_text}\n\n"
-            f"📅 Действует до: {limits['tariff_end_date'][:10]}\n\n"
-            f"🐾 Лимиты обновляются в полночь!",
+            f"📅 Действует до: {limits['tariff_end_date'][:10]}\n"
+            f"🐾 Лимиты обновляются в полночь!\n\n"
+            f"❤️ <b>Любимые фильмы</b> — скоро здесь появится список твоих любимых фильмов!\n"
+            f"📝 <b>Мои обращения</b> — скоро здесь появятся твои обращения к тренерам!",
             parse_mode="html"
         )
+        
+        buttons = [
+            [{"type": "callback", "text": "❤️ Любимые фильмы (скоро)", "payload": "favorites_soon"}],
+            [{"type": "callback", "text": "📝 Мои обращения (скоро)", "payload": "feedback_soon"}],
+            [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
+        ]
+        keyboard = InlineKeyboardMarkup(buttons)
+        await send_func("👇 Что дальше?", attachments=[keyboard])
 
     # ==================== ОБРАБОТЧИК СООБЩЕНИЙ ====================
     async def _handle_message(self, event: MessageCreated):
@@ -1240,7 +1305,7 @@ class MaxAdapter:
         else:
             await self._perform_search(event, user_id, text)
 
-    # ===== КиноЛогово и Пообщаться =====
+    # ===== КиноЛогово =====
     async def _handle_agent(self, event: MessageCreated, user_id: int, query: str):
         context = self._get_user_context(user_id)
         agent_mode = context.get('agent_mode', 'chat')
@@ -1274,10 +1339,8 @@ class MaxAdapter:
                 )
                 return
             
-            # Отправляем "Дай-ка подумаю..." с автоудалением
             thinking_msg = await event.message.answer("💬 Дай-ка подумаю... 🐾")
             
-            # Автоудаление через 2 секунды
             async def delete_after_delay():
                 await asyncio.sleep(2)
                 try:
@@ -1299,7 +1362,6 @@ class MaxAdapter:
                 if user_id not in ADMIN_IDS:
                     increment_stat_counter(user_id, 'opinion_count')
                 
-                # Ответ с кнопкой "В главное меню"
                 keyboard = InlineKeyboardMarkup([
                     [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
                 ])
@@ -1318,15 +1380,15 @@ class MaxAdapter:
             Пользователь спрашивает о персоне: {query}
 
             Найди в базе этого актёра или режиссёра и сделай разбор:
-            1. Лучшие роли/работы (с рейтингом и кратким объяснением почему)
-            2. Самые недооценённые фильмы (те, где он сыграл гениально, но прошли незамеченными)
-            3. Если указан период (например "после 2010"), учти это
-            4. Если указан жанр — учти и его
-            5. Укажи общее количество фильмов с этой персоной
+            1. Лучшие роли/работы (с рейтингом и кратким объяснением)
+            2. Самые недооценённые фильмы
+            3. Если указан период — учти его
+            4. Если указан жанр — учти его
+            5. Укажи общее количество фильмов
 
-            В конце дай рекомендацию — какой фильм посмотреть первым.
+            В конце дай рекомендацию.
 
-            ОБЯЗАТЕЛЬНО указывай ID каждого фильма в формате (ID: число).
+            Найди 3-5 фильмов. ОБЯЗАТЕЛЬНО указывай ID в формате (ID: число).
             """
             await event.message.answer("🐾 Нюхаю лучшие роли...")
             
@@ -1339,37 +1401,7 @@ class MaxAdapter:
                 if user_id not in ADMIN_IDS:
                     increment_stat_counter(user_id, 'opinion_count')
                 
-                # Извлекаем ID и показываем карточки
-                movie_ids = extract_movie_ids(response)
-                logger.info(f"Найдено ID в ответе агента: {movie_ids}")
-                
-                # Формируем ответ с кнопкой карточек
-                if movie_ids:
-                    movies_list = []
-                    for movie_id in movie_ids[:10]:
-                        movie_details = get_movie_details(movie_id)
-                        if movie_details:
-                            movies_list.append(movie_details)
-                        else:
-                            logger.warning(f"Фильм с ID {movie_id} не найден в БД")
-                    
-                    if movies_list:
-                        context = self._get_user_context(user_id)
-                        context['movies'] = movies_list
-                        context['query'] = f'актёрский нюх: {query[:30]}...'
-                        
-                        # Кнопка "Показать карточки" прямо в ответе
-                        keyboard = InlineKeyboardMarkup([
-                            [{"type": "callback", "text": f"🎬 Показать {len(movies_list)} карточек", "payload": "agent_show_cards"}],
-                            [{"type": "callback", "text": "🐾 Ещё актёрский нюх", "payload": "agent_actor"}],
-                            [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
-                        ])
-                        await event.message.answer(response, attachments=[keyboard])
-                        return
-                
-                # Если нет карточек — просто ответ
-                keyboard = get_action_keyboard("актёрский нюх", "agent_actor")
-                await event.message.answer(response, attachments=[keyboard])
+                await self._process_agent_response(event, user_id, response, query, "актёрский нюх", "agent_actor")
                 
             except Exception as e:
                 logger.error(f"Ошибка агента: {e}")
@@ -1383,12 +1415,11 @@ class MaxAdapter:
 
             Пользователь описал, что хочет посмотреть: {query}
 
-            Твоя задача:
-            1. Найди в базе 3 фильма, которые лучше всего подходят под это описание
-            2. Для каждого: название (год), рейтинг, краткое объяснение, почему он подходит под описание
-            3. В конце посоветуй, с какого начать
+            Найди 3 фильма, которые лучше всего подходят под описание.
+            Для каждого: название (год), рейтинг, объяснение.
+            В конце посоветуй, с какого начать.
 
-            ОБЯЗАТЕЛЬНО указывай ID каждого фильма в формате (ID: число).
+            ОБЯЗАТЕЛЬНО указывай ID в формате (ID: число).
             """
             await event.message.answer("🔎 Нюхаю сюжеты...")
             
@@ -1401,33 +1432,7 @@ class MaxAdapter:
                 if user_id not in ADMIN_IDS:
                     increment_stat_counter(user_id, 'opinion_count')
                 
-                movie_ids = extract_movie_ids(response)
-                logger.info(f"Найдено ID в ответе агента: {movie_ids}")
-                
-                if movie_ids:
-                    movies_list = []
-                    for movie_id in movie_ids[:10]:
-                        movie_details = get_movie_details(movie_id)
-                        if movie_details:
-                            movies_list.append(movie_details)
-                        else:
-                            logger.warning(f"Фильм с ID {movie_id} не найден в БД")
-                    
-                    if movies_list:
-                        context = self._get_user_context(user_id)
-                        context['movies'] = movies_list
-                        context['query'] = f'по сюжету: {query[:30]}...'
-                        
-                        keyboard = InlineKeyboardMarkup([
-                            [{"type": "callback", "text": f"🎬 Показать {len(movies_list)} карточек", "payload": "agent_show_cards"}],
-                            [{"type": "callback", "text": "🔎 Ещё по сюжету", "payload": "agent_plot_search"}],
-                            [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
-                        ])
-                        await event.message.answer(response, attachments=[keyboard])
-                        return
-                
-                keyboard = get_action_keyboard("по сюжету", "agent_plot_search")
-                await event.message.answer(response, attachments=[keyboard])
+                await self._process_agent_response(event, user_id, response, query, "по сюжету", "agent_plot_search")
                 
             except Exception as e:
                 logger.error(f"Ошибка агента: {e}")
@@ -1436,13 +1441,35 @@ class MaxAdapter:
 
         # ===== РЕЖИМ "ПОДОБРАТЬ ФИЛЬМ" =====
         if agent_mode == 'recommend':
-            enhanced_query = f"Сделай подборку фильмов по запросу: {query}. Предложи 3-5 вариантов с объяснением. ОБЯЗАТЕЛЬНО указывай ID каждого фильма в формате (ID: число)."
+            enhanced_query = f"""
+            Ты — КиноИщейка, собака-девочка, кинокритик. 🐕
+
+            Пользователь просит подборку фильмов: {query}
+
+            Найди от 3 до 5 фильмов, которые идеально подходят.
+            Для каждого: название (год), рейтинг, краткое описание.
+            В конце дай совет, с какого начать.
+
+            Если нашлось больше 5 — выбери 5 лучших.
+            Если меньше 3 — покажи что есть, но скажи об этом.
+
+            ОБЯЗАТЕЛЬНО указывай ID в формате (ID: число).
+            """
+            await event.message.answer("🐕‍🦺 Взяла след! Бегу по запаху, это займёт пару минут...")
+
+        # ===== РЕЖИМ "СРАВНИТЬ" =====
         elif agent_mode == 'compare':
-            enhanced_query = f"Сравни эти два фильма: {query}. Сделай вывод, что лучше посмотреть."
+            enhanced_query = f"""
+            Сравни эти два фильма: {query}.
+            Сравни по рейтингу, жанрам, актёрам и режиссёрам.
+            Сделай вывод, что лучше посмотреть.
+            ОБЯЗАТЕЛЬНО указывай ID в формате (ID: число).
+            """
+            await event.message.answer("🐕‍🦺 Беру след для сравнения...")
+
         else:
             enhanced_query = query
-
-        await event.message.answer("🐕‍🦺 Взяла след! Бегу по запаху, это займёт пару минут...")
+            await event.message.answer("🐕‍🦺 Взяла след! Бегу по запаху...")
 
         if not ai_client:
             await event.message.answer("😢 Генерация временно недоступна.")
@@ -1454,43 +1481,67 @@ class MaxAdapter:
             if user_id not in ADMIN_IDS:
                 increment_stat_counter(user_id, 'opinion_count')
             
-            movie_ids = extract_movie_ids(response)
-            logger.info(f"Найдено ID в ответе агента: {movie_ids}")
+            if agent_mode == 'compare':
+                # Для сравнения показываем только текст без карточек
+                await event.message.answer(response)
+                keyboard = get_action_keyboard("сравнение", "agent_compare")
+                await event.message.answer("🐾 Куда бежим дальше?", attachments=[keyboard])
+                return
             
-            if movie_ids:
-                movies_list = []
-                for movie_id in movie_ids[:10]:
-                    movie_details = get_movie_details(movie_id)
-                    if movie_details:
-                        movies_list.append(movie_details)
-                    else:
-                        logger.warning(f"Фильм с ID {movie_id} не найден в БД")
-                
-                if movies_list:
-                    context = self._get_user_context(user_id)
-                    context['movies'] = movies_list
-                    context['query'] = f'рекомендации агента: {query[:30]}...'
-                    
-                    # Кнопка "Показать карточки" прямо в ответе
-                    keyboard = InlineKeyboardMarkup([
-                        [{"type": "callback", "text": f"🎬 Показать {len(movies_list)} карточек", "payload": "agent_show_cards"}],
-                        [{"type": "callback", "text": "🎬 Ещё подборка", "payload": "agent_recommend"}],
-                        [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
-                    ])
-                    await event.message.answer(response, attachments=[keyboard])
-                    return
-            
-            agent_action_map = {
-                'recommend': ('подборка', 'agent_recommend'),
-                'compare': ('сравнение', 'agent_compare'),
-            }
-            action_name, action_payload = agent_action_map.get(agent_mode, ('вопрос', 'chat'))
-            keyboard = get_action_keyboard(action_name, action_payload)
-            await event.message.answer(response, attachments=[keyboard])
+            # Для остальных режимов — обрабатываем с карточками
+            await self._process_agent_response(event, user_id, response, query, "подборка", "agent_recommend")
             
         except Exception as e:
             logger.error(f"Ошибка агента: {e}")
             await event.message.answer("🐾 Гав! Я запуталась в проводах. Попробуй позже!")
+
+    async def _process_agent_response(self, event, user_id, response, query, action_name, action_payload):
+        """Обрабатывает ответ агента: извлекает ID, показывает карточки"""
+        
+        # Извлекаем ID
+        movie_ids = extract_movie_ids(response)
+        logger.info(f"Найдено ID в ответе агента: {movie_ids}")
+        
+        # Ограничиваем до 5
+        movie_ids = movie_ids[:5]
+        
+        # Собираем фильмы
+        movies_list = []
+        for movie_id in movie_ids:
+            movie_details = get_movie_details(movie_id)
+            if movie_details:
+                movies_list.append(movie_details)
+            else:
+                logger.warning(f"Фильм с ID {movie_id} не найден в БД")
+        
+        # Показываем ответ агента
+        await event.message.answer(response)
+        
+        if movies_list:
+            # Если меньше 3 — пишем сообщение
+            if len(movies_list) < 3:
+                await event.message.answer(
+                    f"🐾 Нашла только {len(movies_list)} фильмов по твоему запросу. Попробуй переформулировать, если хочешь больше вариантов!"
+                )
+            
+            context = self._get_user_context(user_id)
+            context['movies'] = movies_list
+            context['query'] = f'{action_name}: {query[:30]}...'
+            
+            # Кнопка с точным количеством
+            keyboard = InlineKeyboardMarkup([
+                [{"type": "callback", "text": f"🎬 Показать карточки ({len(movies_list)})", "payload": "agent_show_cards"}],
+                [{"type": "callback", "text": f"🔄 Ещё {action_name}", "payload": action_payload}],
+                [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
+            ])
+            await event.message.answer(
+                "👇 Хочешь посмотреть карточки этих фильмов?",
+                attachments=[keyboard]
+            )
+        else:
+            await event.message.answer(
+                "😢 К сожалению, я не нашла эти фильмы в своей базе. Возможно, они ещё не добавлены."
+            )
 
     # ===== ПОКАЗ КАРТОЧЕК ИЗ АГЕНТА =====
     async def _handle_agent_show_cards(self, event, user_id):
@@ -1587,7 +1638,7 @@ class MaxAdapter:
         context['is_person_search'] = True
         await self._show_person_search_page(event, user_id, 0, query)
 
-    # ==================== МНЕНИЕ И СВЕЖИЙ ВЗГЛЯД ====================
+    # ==================== МНЕНИЕ ====================
     async def _handle_opinion_command(self, event: MessageCreated):
         user_id = event.message.sender.user_id
         text = event.message.body.text.replace('/opinion', '').strip()
@@ -1654,16 +1705,12 @@ class MaxAdapter:
                 increment_stat_counter(user_id, 'opinion_count')
             record_user_opinion(user_id, movie_id)
             
-            # Форматируем мнение с кнопками прямо в одном сообщении
             is_premium = user_id in ADMIN_IDS or _is_premium_tariff(get_user_limits(user_id).get('tariff_name', ''))
             text, keyboard = _format_opinion_with_buttons(opinion, movie_name, movie_year, movie_id, source, user_id, is_premium)
             await send_func(text, parse_mode="html", attachments=[keyboard])
 
-    # ===== СВЕЖИЙ ВЗГЛЯД (регенерация) =====
+    # ===== СВЕЖИЙ ВЗГЛЯД =====
     async def _handle_regenerate(self, event, user_id, movie_id, source):
-        """Обработка регенерации мнения (Свежий взгляд)"""
-        
-        # 👇 АДМИН — ВСЁ МОЖЕТ (без проверок)
         if user_id in ADMIN_IDS:
             logger.info(f"👑 Админ {user_id} запросил регенерацию (безлимит)")
             movie_details = get_movie_details(movie_id)
@@ -1690,7 +1737,6 @@ class MaxAdapter:
                 await event.message.answer("🐾 Гав! Что-то пошло не так. Попробуй позже.")
             return
         
-        # 👇 ДЛЯ ОБЫЧНЫХ ПОЛЬЗОВАТЕЛЕЙ — проверки
         limits = get_user_limits(user_id)
         stats = get_user_stats(user_id, date.today().isoformat())
         
@@ -1712,7 +1758,6 @@ class MaxAdapter:
             )
             return
         
-        # Получаем фильм
         movie_details = get_movie_details(movie_id)
         if not movie_details:
             await event.message.answer("😢 Не могу найти фильм.")
@@ -1802,53 +1847,40 @@ class MaxAdapter:
 5. Добавь собачий юмор
 6. Говори о себе в женском роде
 7. НЕ используй вводные фразы типа "Я посмотрела фильм и вот что думаю" - сразу начинай с содержательной части
-8. Не благодари за замечания и не упоминай, что это исправленная версия - просто напиши новое мнение
+8. Не благодари за замечания
 
 Расскажи о:
 - Настроении и смысле фильма
-- Наградах (с учетом страны производства, если знаешь точно, а если нет - просто не упоминай, не выдумывай!)
+- Наградах (если знаешь точно)
 - Особенностях
 - Почему стоит посмотреть
 - Плюсах и минусах
 
-В конце обязательно добавь:
-Оценка: от 5 до 10 (краткий комментарий почему)
+В конце:
+Оценка: от 5 до 10 (краткий комментарий)
 
-После оценки добавь:
-Настроение: 5 хэштегов (например #Радость #Грусть #Вдохновение #Ностальгия #Уют)
-Атмосфера: 5 хэштегов (например #Мрачность #Яркость #Теплота #Напряжение #Сюрреализм)"""
+После оценки:
+Настроение: 5 хэштегов
+Атмосфера: 5 хэштегов"""
 
         if force_regenerate:
-            prompt += "\n\n⚠️ Это свежий взгляд на тот же фильм. Постарайся найти новые детали, которые не упоминались в предыдущем мнении. Сделай акцент на других аспектах фильма, персонажах, режиссёрских приёмах или скрытых смыслах. Не повторяй то, что уже было сказано."
+            prompt += "\n\n⚠️ Это свежий взгляд на тот же фильм. Найди новые детали, не повторяй предыдущее мнение."
 
         response = ai_client.chat.completions.create(
             model="deepseek-chat",
             messages=[
-                {"role": "system", "content": "Ты — КиноИщейка, собака-девочка, кинокритик. Твои ответы должны быть дружелюбными, с юмором, но при этом информативными. Обязательно используй женский род: 'я посмотрела', 'мне понравилось', 'я нашла' и т.д."},
+                {"role": "system", "content": "Ты — КиноИщейка, собака-девочка, кинокритик. Отвечай по-русски, с юмором, в женском роде."},
                 {"role": "user", "content": prompt}
             ],
             timeout=180
         )
 
         full_response = response.choices[0].message.content.strip()
-        
-        short_opinion = ""
-        mood_tags = ""
-        atmosphere_tags = ""
-                     
-        for part in full_response.split('\n'):
-            if part.startswith("Оценка:"):
-                short_opinion = part
-            elif part.startswith("Настроение:"):
-                mood_tags = part.replace("Настроение:", "").strip()
-            elif part.startswith("Атмосфера:"):
-                atmosphere_tags = part.replace("Атмосфера:", "").strip()
-        
         return full_response
 
     # ==================== ЗАПУСК ====================
     async def run(self):
-        logger.info("🚀 MaxAdapter запущен (исправленная версия)")
+        logger.info("🚀 MaxAdapter запущен (итоговая версия)")
         await self.bot.delete_webhook()
         await self.dp.start_polling(self.bot)
 
