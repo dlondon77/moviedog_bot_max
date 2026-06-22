@@ -1,9 +1,9 @@
-# core/max_adapter.py — ПОЛНАЯ ВЕРСИЯ
+# core/max_adapter.py — ПОЛНАЯ ВЕРСИЯ (БЕЗ PAYMENT)
 # + Исправлены премьеры (выбор месяца)
 # + Исправлены ссылки в подборках и карточках
 # + Исправлены любимые фильмы
 # + Исправлен профиль
-# + Интеграция с Тинькофф (тарифы, подписки, платежи)
+# + ВСЁ, ЧТО СВЯЗАНО С PAYMENT — УДАЛЕНО
 
 import logging
 import configparser
@@ -11,7 +11,7 @@ import os
 import sys
 import re
 import asyncio
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CORE_DIR = os.path.join(BASE_DIR, 'core')
@@ -31,18 +31,10 @@ import httpx
 # ==================== КОНСТАНТЫ ====================
 ADMIN_IDS = [7191208]
 
-# ==================== КОНСТАНТЫ ТАРИФОВ ====================
-TARIFFS = {
-    1: {'id': 1, 'name': 'Охотничий', 'price': 199, 'description': '10 мнений в день + любимые фильмы'},
-    2: {'id': 2, 'name': 'Ищейка', 'price': 399, 'description': '30 мнений + 5 свежих взглядов в день + любимые фильмы'},
-    3: {'id': 3, 'name': 'Вожак', 'price': 999, 'description': 'Безлимит мнений + безлимит свежих взглядов + любимые фильмы'}
-}
-
 # ==================== ИМПОРТЫ ИЗ CORE ====================
 import user as user_module
 import movie as movie_module
 import db as db_module
-import payment as payment_module
 from core.agent import run_agent, clear_chat_history, extract_movie_ids, CHAT_SYSTEM_PROMPT
 
 register_user = user_module.register_user
@@ -122,55 +114,6 @@ def get_favorites(user_id: int, limit: int = 10, offset: int = 0) -> list:
     movies = cursor.fetchall()
     conn.close()
     return [{'movie_id': row[0], 'added_at': row[1], 'name': row[2], 'year': row[3], 'rating': row[4]} for row in movies]
-
-# ==================== ПОДПИСКИ ====================
-def get_user_subscription(user_id: int) -> dict:
-    """Получает текущую подписку пользователя"""
-    conn = db_module.get_opinions_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT tariff_id, tariff_name, tariff_end_date 
-        FROM users 
-        WHERE user_id = ?
-    ''', (user_id,))
-    row = cursor.fetchone()
-    conn.close()
-    
-    if row:
-        return {
-            'tariff_id': row[0],
-            'tariff_name': row[1],
-            'tariff_end_date': row[2]
-        }
-    return None
-
-def activate_subscription(user_id: int, tariff_id: int, payment_id: str = None) -> bool:
-    """Активирует подписку после оплаты"""
-    tariff = TARIFFS.get(tariff_id)
-    if not tariff:
-        return False
-    
-    end_date = (datetime.now() + timedelta(days=30)).isoformat()
-    
-    conn = db_module.get_opinions_db_connection()
-    cursor = conn.cursor()
-    
-    try:
-        cursor.execute('''
-            UPDATE users 
-            SET tariff_id = ?, tariff_name = ?, tariff_end_date = ?
-            WHERE user_id = ?
-        ''', (tariff_id, tariff['name'], end_date, user_id))
-        conn.commit()
-        
-        logger.info(f"✅ Подписка активирована для пользователя {user_id}: {tariff['name']} до {end_date}")
-        return True
-        
-    except Exception as e:
-        logger.error(f"Ошибка активации подписки: {e}")
-        return False
-    finally:
-        conn.close()
 
 # ==================== КЭШ МНЕНИЙ ====================
 def get_cached_opinion(movie_id: int):
@@ -289,18 +232,6 @@ def get_agent_menu():
             {"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}
         ]
     ]
-    return InlineKeyboardMarkup(buttons)
-
-def get_tariff_keyboard():
-    """Клавиатура для выбора тарифа"""
-    buttons = []
-    for tariff_id, tariff in TARIFFS.items():
-        buttons.append([
-            {"type": "callback", "text": f"{tariff['name']} — {tariff['price']}₽/мес", "payload": f"tariff_select_{tariff_id}"}
-        ])
-    buttons.append([
-        {"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}
-    ])
     return InlineKeyboardMarkup(buttons)
 
 def get_pagination_buttons(current_page: int, total_pages: int, prefix: str, query: str = ""):
@@ -788,71 +719,6 @@ class MaxAdapter:
             )
             return
 
-        # ===== ТАРИФЫ =====
-        if payload == "tariff_menu":
-            text = (
-                "💰 <b>Выбери тариф</b>\n\n"
-                "🐕 <b>Охотничий</b> — 199 ₽/мес\n"
-                "• 10 мнений в день\n"
-                "• Любимые фильмы\n\n"
-                "🕵️ <b>Ищейка</b> — 399 ₽/мес\n"
-                "• 30 мнений в день\n"
-                "• 5 свежих взглядов в день\n"
-                "• Любимые фильмы\n\n"
-                "🐺 <b>Вожак</b> — 999 ₽/мес\n"
-                "• Безлимит мнений\n"
-                "• Безлимит свежих взглядов\n"
-                "• Любимые фильмы\n\n"
-                "Нажми кнопку с тарифом для оформления:"
-            )
-            await event.message.answer(text, parse_mode="html", attachments=[get_tariff_keyboard()])
-            return
-
-        if payload.startswith("tariff_select_"):
-            tariff_id = int(payload.split("_")[2])
-            await self._handle_tariff_select(event, user_id, tariff_id)
-            return
-
-        if payload == "tariff_skip_email":
-            context = self._get_user_context(user_id)
-            context['tariff_email'] = None
-            context['state'] = 'awaiting_tariff_phone'
-            await event.message.answer(
-                "📱 Введи телефон для подтверждения платежа:\n\n"
-                "Формат: +79000000000"
-            )
-            return
-
-        if payload.startswith("tariff_pay_"):
-            tariff_id = int(payload.split("_")[2])
-            await self._handle_tariff_payment(event, user_id, tariff_id)
-            return
-
-        if payload.startswith("tariff_pay_url_"):
-            payment_id = payload.split("_")[3]
-            payment_info = payment_module.get_payment_info(payment_id)
-            if payment_info and payment_info.get('payment_url'):
-                buttons = [
-                    [{"type": "link", "text": "🔗 Перейти к оплате", "url": payment_info['payment_url']}],
-                    [{"type": "callback", "text": "🔄 Проверить статус", "payload": f"tariff_check_{payment_id}"}],
-                    [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
-                ]
-                keyboard = InlineKeyboardMarkup(buttons)
-                await event.message.answer(
-                    "🔗 Ссылка для оплаты:\n\n"
-                    f"<a href='{payment_info['payment_url']}'>Перейти к оплате</a>",
-                    parse_mode="html",
-                    attachments=[keyboard]
-                )
-            else:
-                await event.message.answer("❌ Ссылка на оплату не найдена.")
-            return
-
-        if payload.startswith("tariff_check_"):
-            payment_id = payload.split("_")[2]
-            await self._handle_tariff_check(event, user_id, payment_id)
-            return
-
         # ===== СЦЕНАРИИ КиноЛогово =====
         if payload == "agent_recommend":
             self._get_user_context(user_id)['agent_mode'] = 'recommend'
@@ -1131,122 +997,11 @@ class MaxAdapter:
         )
         
         buttons = [
-            [{"type": "callback", "text": "💰 Сменить тариф", "payload": "tariff_menu"}],
             [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
         ]
         keyboard = InlineKeyboardMarkup(buttons)
         
         await send_func(text, parse_mode="html", attachments=[keyboard])
-
-    # ==================== ТАРИФЫ И ПЛАТЕЖИ ====================
-    async def _handle_tariff_select(self, event, user_id, tariff_id):
-        tariff = TARIFFS.get(tariff_id)
-        if not tariff:
-            await event.message.answer("😢 Такого тарифа нет.")
-            return
-        
-        current = get_user_subscription(user_id)
-        if current and current['tariff_id'] == tariff_id:
-            await event.message.answer("🐾 У тебя уже есть этот тариф!")
-            return
-        
-        text = (
-            f"💰 <b>Подтверждение</b>\n\n"
-            f"Ты выбираешь тариф: <b>{tariff['name']}</b>\n"
-            f"Стоимость: <b>{tariff['price']} ₽/мес</b>\n\n"
-            f"{tariff['description']}\n\n"
-            f"📱 Для оплаты нужно будет указать телефон.\n"
-            f"Email опционально.\n\n"
-            f"Продолжить?"
-        )
-        
-        buttons = [
-            [
-                {"type": "callback", "text": "✅ Да, оплатить", "payload": f"tariff_pay_{tariff_id}"},
-                {"type": "callback", "text": "❌ Отмена", "payload": "tariff_menu"}
-            ]
-        ]
-        keyboard = InlineKeyboardMarkup(buttons)
-        await event.message.answer(text, parse_mode="html", attachments=[keyboard])
-
-    async def _handle_tariff_payment(self, event, user_id, tariff_id):
-        tariff = TARIFFS.get(tariff_id)
-        if not tariff:
-            await event.message.answer("😢 Такого тарифа нет.")
-            return
-        
-        context = self._get_user_context(user_id)
-        context['pending_tariff'] = tariff_id
-        context['state'] = 'awaiting_tariff_email'
-        
-        await event.message.answer(
-            "📧 Введите ваш email (можно пропустить, нажмите «Пропустить»):\n\n"
-            "Это нужно для чека и дополнительной верификации.",
-            attachments=[InlineKeyboardMarkup([
-                [{"type": "callback", "text": "⏭️ Пропустить", "payload": "tariff_skip_email"}]
-            ])]
-        )
-
-    async def _handle_tariff_check(self, event, user_id, payment_id):
-        await event.message.answer("🔄 Проверяю статус платежа...")
-        
-        status_data = payment_module.check_payment_status(payment_id)
-        if not status_data:
-            await event.message.answer("❌ Не удалось проверить статус. Попробуй позже.")
-            return
-        
-        status = status_data.get('Status', '').upper()
-        
-        if status == 'CONFIRMED':
-            tariff_id = self.user_context.get(user_id, {}).get('pending_tariff')
-            if tariff_id:
-                if activate_subscription(user_id, tariff_id, payment_id):
-                    await event.message.answer(
-                        "🎉 <b>Оплата подтверждена!</b>\n\n"
-                        "Тариф активирован! Спасибо за поддержку! 🐾💰\n\n"
-                        "Теперь тебе доступны все привилегии тарифа!",
-                        parse_mode="html",
-                        attachments=[get_main_menu()]
-                    )
-                    return
-            
-            await event.message.answer(
-                "✅ Платёж подтверждён! 🎉\n"
-                "Спасибо за поддержку!",
-                attachments=[get_main_menu()]
-            )
-            
-        elif status in ['NEW', 'FORM_SHOWED', 'AUTHORIZING', 'AUTHORIZED']:
-            payment_info = payment_module.get_payment_info(payment_id)
-            if payment_info and payment_info.get('payment_url'):
-                buttons = [
-                    [{"type": "callback", "text": "🔗 Перейти к оплате", "payload": f"tariff_pay_url_{payment_id}"}],
-                    [{"type": "callback", "text": "🔄 Проверить снова", "payload": f"tariff_check_{payment_id}"}],
-                    [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
-                ]
-                keyboard = InlineKeyboardMarkup(buttons)
-                await event.message.answer(
-                    f"⏳ Платёж в обработке. Статус: {status}\n"
-                    f"Нажми «Перейти к оплате», если не открылась форма.",
-                    attachments=[keyboard]
-                )
-            else:
-                buttons = [
-                    [{"type": "callback", "text": "🔄 Проверить снова", "payload": f"tariff_check_{payment_id}"}],
-                    [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
-                ]
-                keyboard = InlineKeyboardMarkup(buttons)
-                await event.message.answer(
-                    f"⏳ Платёж в обработке. Статус: {status}\n"
-                    f"Подожди немного или проверь позже.",
-                    attachments=[keyboard]
-                )
-        else:
-            await event.message.answer(
-                f"❌ Статус платежа: {status}\n"
-                "Если что-то пошло не так, попробуй ещё раз.",
-                attachments=[get_tariff_keyboard()]
-            )
 
     # ==================== ПОИСК И ПАГИНАЦИЯ ====================
     async def _perform_search(self, event, user_id, query):
@@ -1499,7 +1254,6 @@ class MaxAdapter:
             return
         
         try:
-            # Формируем промт
             prompt = self._build_opinion_prompt(movie_details)
             
             response = ai_client.chat.completions.create(
@@ -1514,7 +1268,6 @@ class MaxAdapter:
             
             opinion = response.choices[0].message.content
             
-            # Сохраняем в кэш
             save_opinion_cache(movie_id, opinion)
             record_user_opinion(user_id, movie_id)
             increment_stat_counter(user_id, 'opinion_count')
@@ -1618,14 +1371,6 @@ class MaxAdapter:
         context = self._get_user_context(user_id)
         state = context.get('state')
 
-        if state == 'awaiting_tariff_email':
-            await self._process_tariff_email(event, user_id, text)
-            return
-
-        if state == 'awaiting_tariff_phone':
-            await self._process_tariff_phone(event, user_id, text)
-            return
-
         if state == 'awaiting_feedback_movie_id':
             await self._process_feedback_movie_id(event, user_id, text)
             return
@@ -1648,97 +1393,6 @@ class MaxAdapter:
             await self._perform_person_search(event, user_id, text)
         else:
             await self._perform_search(event, user_id, text)
-
-    # ==================== ТАРИФЫ: ОБРАБОТКА EMAIL/PHONE ====================
-    async def _process_tariff_email(self, event, user_id, text):
-        context = self._get_user_context(user_id)
-        
-        if text.lower() in ['пропустить', 'skip']:
-            context['tariff_email'] = None
-        elif re.match(r'^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$', text):
-            context['tariff_email'] = text
-        else:
-            buttons = [
-                [{"type": "callback", "text": "⏭️ Пропустить", "payload": "tariff_skip_email"}]
-            ]
-            keyboard = InlineKeyboardMarkup(buttons)
-            await event.message.answer(
-                "❌ Это не похоже на email. Введи корректный email или нажми «Пропустить»:",
-                attachments=[keyboard]
-            )
-            return
-        
-        context['state'] = 'awaiting_tariff_phone'
-        await event.message.answer(
-            "📱 Введи телефон для подтверждения платежа:\n\n"
-            "Формат: +79000000000\n"
-            "Это нужно для банка, данные не передаются третьим лицам."
-        )
-
-    async def _process_tariff_phone(self, event, user_id, text):
-        context = self._get_user_context(user_id)
-        
-        if not re.match(r'^\+\d{11}$', text):
-            await event.message.answer(
-                "❌ Неверный формат. Введи телефон в формате +79000000000:"
-            )
-            return
-        
-        context['tariff_phone'] = text
-        
-        tariff_id = context.get('pending_tariff')
-        tariff = TARIFFS.get(tariff_id)
-        
-        if not tariff:
-            await event.message.answer("😢 Что-то пошло не так. Попробуй сначала.")
-            return
-        
-        await event.message.answer("💰 Создаю платёж...")
-        
-        payment_data = payment_module.init_payment(
-            user_id=user_id,
-            amount=tariff['price'],
-            description=f"Подписка {tariff['name']} (месяц)",
-            user_email=context.get('tariff_email'),
-            user_phone=context['tariff_phone'],
-            tariff_id=tariff_id
-        )
-        
-        if payment_data and payment_data.get('Success'):
-            payment_id = payment_data['PaymentId']
-            payment_url = payment_data.get('PaymentURL')
-            
-            buttons = []
-            if payment_url:
-                buttons.append([
-                    {"type": "callback", "text": "🔗 Перейти к оплате", "payload": f"tariff_pay_url_{payment_id}"}
-                ])
-            buttons.append([
-                {"type": "callback", "text": "🔄 Проверить статус", "payload": f"tariff_check_{payment_id}"}
-            ])
-            buttons.append([
-                {"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}
-            ])
-            keyboard = InlineKeyboardMarkup(buttons)
-            
-            text = (
-                f"💳 <b>Платёж создан!</b>\n\n"
-                f"Сумма: {tariff['price']} ₽\n"
-                f"Тариф: {tariff['name']}\n"
-                f"ID платежа: {payment_id}\n\n"
-                f"Нажми «Перейти к оплате» или проверь статус позже."
-            )
-            await event.message.answer(text, parse_mode="html", attachments=[keyboard])
-            
-            context['pending_payment'] = payment_id
-            
-        else:
-            await event.message.answer(
-                "❌ Не удалось создать платёж. Попробуй позже.",
-                attachments=[get_tariff_keyboard()]
-            )
-        
-        context.pop('state', None)
 
     # ==================== FEEDBACK: ОБРАБОТКА ====================
     async def _process_feedback_movie_id(self, event, user_id, text):
