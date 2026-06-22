@@ -239,7 +239,7 @@ def init_db():
                 )
             ''')
 
-            # ================== Таблица любимых фильмов ==================
+            # ================== ТАБЛИЦА ЛЮБИМЫХ ФИЛЬМОВ ==================
             # Проверяем, существует ли таблица favorite_movies
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='favorite_movies'")
             if not cursor.fetchone():
@@ -260,7 +260,7 @@ def init_db():
                 cursor.execute('''
                     CREATE INDEX idx_favorite_movies_movie_id ON favorite_movies(movie_id)
                 ''')
-                conn.commit()
+                opinions_conn.commit()
                 logger.info("✅ Таблица favorite_movies создана")
             else:
                 logger.info("✅ Таблица favorite_movies уже существует")
