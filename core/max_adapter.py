@@ -2010,6 +2010,6 @@ class MaxAdapter:
         await event.message.answer(text, parse_mode="html")
 
     # ==================== RUN ====================
-    def run(self):
+    async def run(self):
         logger.info("🚀 Запускаю MaxAdapter...")
-        self.dp.run_polling(self.bot)
+        await self.dp.start_polling(self.bot)
