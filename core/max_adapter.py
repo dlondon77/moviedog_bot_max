@@ -1739,9 +1739,9 @@ class MaxAdapter:
             await event.message.answer("🐾 Гав! Что-то пошло не так. Попробуй позже.")
 
     def _format_opinion(self, opinion, movie_name, movie_year, movie_id):
+        """Форматирует мнение — ссылка в конце, а не в названии"""
         kp_url = f"https://www.kinopoisk.ru/film/{movie_id}/"
-        title_with_link = f"<a href='{kp_url}'><b>{movie_name}</b></a> ({movie_year})"
-        return f"Я посмотрела {title_with_link}, и вот что думаю:\n\n{opinion}\n\n🐾"
+        return f"🐾 Я посмотрела <b>{movie_name}</b> ({movie_year}), и вот что думаю:\n\n{opinion}\n\n🔗 <a href='{kp_url}'>Кинопоиск</a>\n\n🐾"
 
     async def _generate_opinion(self, movie_details, force_regenerate=False):
         title = movie_details.get('name', 'Без названия')
