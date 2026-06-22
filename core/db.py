@@ -238,6 +238,26 @@ def init_db():
                     UNIQUE (user_id, date)
                 )
             ''')
+
+            # ================== Любимые фильмы ==================
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS favorite_movies (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    movie_id INTEGER NOT NULL,
+                    added_at TEXT NOT NULL,
+                    FOREIGN KEY (user_id) REFERENCES users (user_id),
+                    FOREIGN KEY (movie_id) REFERENCES movies (movie_id),
+                    UNIQUE(user_id, movie_id)
+                )
+            ''')
+            
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_favorite_movies_user_id ON favorite_movies(user_id)
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_favorite_movies_movie_id ON favorite_movies(movie_id)
+            ''')
                         
             opinions_conn.commit()
             logger.info("✅ База opinions.db успешно инициализирована")
