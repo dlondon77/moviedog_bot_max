@@ -2063,3 +2063,15 @@ class MaxAdapter:
             "Ты помогаешь мне становиться лучше! 🐕",
             attachments=[get_feedback_menu()]
         )
+
+    # ==================== ЗАПУСК БОТА ====================
+    async def run(self):
+        """Запускает бота"""
+        logger.info("🚀 Запуск Max-бота...")
+        try:
+            await self.dp.start_polling(self.bot)
+        except Exception as e:
+            logger.error(f"Ошибка при запуске бота: {e}")
+            raise
+        finally:
+            await self.bot.close()
