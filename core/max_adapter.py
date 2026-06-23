@@ -1395,11 +1395,24 @@ class MaxAdapter:
                     f"💰 Оформи подписку для безлимита!"
                 )
                 return
-
+    
         if not ai_client:
             await event.message.answer("😢 Генерация временно недоступна.")
             return
-
+    
+        # ===== УНИВЕРСАЛЬНЫЕ СООБЩЕНИЯ ДЛЯ РЕЖИМОВ =====
+        mode_messages = {
+            'recommend': "🎬 Отбираю фильмы под твой вкус... Это займёт пару минут, я внимательно принюхиваюсь! 🐕‍🦺",
+            'actor': "🐾 Бегу по следам великой личности... 🔍",
+            'plot_search': "🔎 Нюхаю сюжеты... Дай мне пару минут, я найду самые интересные варианты! 🐕",
+            'compare': "⭐ Сравниваю фильмы... Сейчас разложу всё по полочкам! 🧐",
+            'chat': "💬 Дай-ка подумаю... 🐾"
+        }
+        
+        # Отправляем сообщение о начале работы
+        start_message = mode_messages.get(agent_mode, "🐾 Дай-ка подумаю... 🐾")
+        await event.message.answer(start_message)
+    
         # ===== РЕЖИМ "ПООБЩАТЬСЯ" =====
         if agent_mode == 'chat':
             if _is_search_intent(query):
@@ -1418,19 +1431,7 @@ class MaxAdapter:
                 )
                 return
             
-            thinking_msg = await event.message.answer("💬 Дай-ка подумаю... 🐾")
-            
-            async def delete_after_delay():
-                await asyncio.sleep(2)
-                try:
-                    await thinking_msg.delete()
-                except Exception:
-                    pass
-            
-            asyncio.create_task(delete_after_delay())
-            
             try:
-                # Вызываем run_agent с режимом chat
                 response = await run_agent(query, user_id, ai_client, agent_mode='chat', chat_mode=True)
                 
                 if user_id not in ADMIN_IDS:
@@ -1449,10 +1450,9 @@ class MaxAdapter:
                     attachments=[get_agent_menu()]
                 )
             return
-
+    
         # ===== ВСЕ РЕЖИМЫ КИНОЛОГОВО =====
         try:
-            # Вызываем run_agent с соответствующим режимом
             response = await run_agent(query, user_id, ai_client, agent_mode=agent_mode)
             
             if user_id not in ADMIN_IDS:
