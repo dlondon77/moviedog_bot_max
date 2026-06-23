@@ -186,7 +186,8 @@ def get_movie_details(movie_id: int) -> dict:
         
         cursor.execute("""
         SELECT d.id, d.name, d.enName 
-        FROM directors d        JOIN movie_directors md ON d.id = md.director_id
+        FROM directors d
+        JOIN movie_directors md ON d.id = md.director_id
         WHERE md.movie_id = ?
         """, (movie_id,))
         movie['directors'] = [dict(zip(['id', 'name', 'enName'], row)) for row in cursor.fetchall()]
@@ -355,7 +356,7 @@ def format_movie_card(movie, is_premiers=False, query=None, is_person_search=Fal
             )
         
         poster_url = movie.get('poster_url', f"https://st.kp.yandex.net/images/film_big/{movie_id}.jpg")
-        # ПРАВИЛЬНАЯ ССЫЛКА НА КИНОПОИСК
+        # ПРАВИЛЬНАЯ ССЫЛКА НА КИНОПОИСК С ПОЛНЫМ URL
         kp_url = f"https://www.kinopoisk.ru/film/{movie_id}/" if movie_id else "https://www.kinopoisk.ru/"
         
         card = (
@@ -368,7 +369,7 @@ def format_movie_card(movie, is_premiers=False, query=None, is_person_search=Fal
             f"📝 <b>Описание:</b>\n<i>{description}</i>\n\n"
             f"🎥 <b>Режиссер:</b> {directors}\n"
             f"👥 <b>Актеры:</b> {actors}\n\n"
-            f"🔗 <a href='{kp_url}'>Кинопоиск</a>"
+            f"🔗 <a href='{kp_url}'>Кинопоиск</a>: {kp_url}"
         )
         
         return card, None
