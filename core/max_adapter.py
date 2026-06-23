@@ -9,6 +9,7 @@
 # 7. ADMIN_IDS читаются из переменной окружения
 # 8. Исправлена кнопка Премьеры: выбор из 12 месяцев, начиная с 3 месяцев назад
 # 9. Исправлено форматирование подборок (Актёрский нюх, По сюжету)
+# 10. Мнения о фильмах работают в оригинальном формате
 ###############################################################################
 
 import logging
@@ -35,7 +36,6 @@ from openai import OpenAI
 import httpx
 
 # ==================== КОНСТАНТЫ ====================
-# Читаем ADMIN_IDS из переменной окружения
 ADMIN_IDS_STR = os.environ.get("ADMIN_IDS", "")
 ADMIN_IDS = [int(id.strip()) for id in ADMIN_IDS_STR.split(",") if id.strip()] if ADMIN_IDS_STR else [7191208]
 logger.info(f"👑 Администраторы: {ADMIN_IDS}")
@@ -111,60 +111,42 @@ def format_agent_response(response: str) -> str:
     # Убираем множественные переносы строк
     response = re.sub(r'\n{3,}', '\n\n', response)
     
+    # УБИРАЕМ ID ИЗ ТЕКСТА (но оставляем ссылки)
+    response = re.sub(r'\s*\(ID:\s*\d+\)', '', response)
+    response = re.sub(r'\s*ID:\s*\d+', '', response)
+    response = re.sub(r'\(ID:\d+\)', '', response)
+    
+    # Убираем дублирующиеся эмодзи
+    response = re.sub(r'🎬\s*🎬', '🎬', response)
+    response = re.sub(r'⭐\s*⭐', '⭐', response)
+    
     # Добавляем разделители между разделами
     sections = [
-        ('Лучшие роли', r'1\.\s*Лучшие роли'),
-        ('Самые недооценённые фильмы', r'2\.\s*Самые недооценённые фильмы'),
-        ('Период и жанр', r'3\.\s*Период и жанр'),
-        ('Мой вердикт', r'Мой вердикт')
+        ('Лучшие роли', r'(?i)1\.\s*Лучшие роли'),
+        ('Самые недооценённые фильмы', r'(?i)2\.\s*Самые недооценённые фильмы'),
+        ('Период и жанр', r'(?i)3\.\s*Период и жанр'),
+        ('Мой вердикт', r'(?i)Мой вердикт'),
+        ('Рекомендация', r'(?i)Рекомендация'),
+        ('Итог', r'(?i)Итог')
     ]
     
     for section_name, pattern in sections:
-        # Ищем паттерн с учетом возможных вариаций
-        match = re.search(pattern, response, re.IGNORECASE)
+        match = re.search(pattern, response)
         if match:
-            # Добавляем разделитель перед разделом
-            response = response.replace(match.group(0), f'\n\n---\n\n{match.group(0)}')
+            response = response.replace(
+                match.group(0), 
+                f'\n\n---\n\n{match.group(0)}'
+            )
     
-    # Форматируем списки фильмов
-    lines = response.split('\n')
-    formatted_lines = []
-    in_list = False
+    # Проверяем, есть ли рекомендация в конце
+    if not re.search(r'(?i)Мой вердикт|Рекомендую|Советую', response):
+        response += '\n\n🐾 Мой вердикт: рекомендую начать с первого фильма из списка!'
     
-    for line in lines:
-        stripped = line.strip()
-        
-        # Если строка начинается с "🎬" и содержит ссылку, оставляем как есть
-        if stripped.startswith('🎬'):
-            formatted_lines.append(line)
-            in_list = True
-        # Если строка содержит "ID:" и похожа на фильм, но без эмодзи
-        elif 'ID:' in stripped and not stripped.startswith('🎬') and not stripped.startswith('---'):
-            # Проверяем, не является ли это частью ссылки
-            if 'href=' not in stripped:
-                formatted_lines.append(f"🎬 {stripped}")
-                in_list = True
-            else:
-                formatted_lines.append(line)
-        # Если строка содержит ссылку на фильм
-        elif 'href=' in stripped and not stripped.startswith('🎬'):
-            formatted_lines.append(f"🎬 {stripped}")
-            in_list = True
-        else:
-            # Если был список и идет пустая строка, добавляем отступ
-            if in_list and not stripped:
-                formatted_lines.append('')
-                in_list = False
-            else:
-                formatted_lines.append(line)
+    # Добавляем прощание, если его нет
+    if not re.search(r'(?i)Гав|До встречи|Хорошего просмотра', response):
+        response += '\n\n🐕 Гав-гав! Если хочешь ещё подборку — только свистни! 🎬'
     
-    response = '\n'.join(formatted_lines)
-    
-    # Добавляем итоговую рекомендацию в конце, если её нет
-    if 'Мой вердикт' in response and 'Советую начать с:' not in response and 'рекомендую' not in response.lower():
-        response += '\n\n🐾 Мой вердикт: советую начать с одного из перечисленных фильмов!'
-    
-    return response
+    return response.strip()
 
 # ==================== КОНФИГ И DEEPSEEK ====================
 def load_config():
@@ -389,7 +371,7 @@ def get_filter_keyboard(query, filters, total_count, has_more):
 
 
 def get_month_year_keyboard():
-    """Клавиатура для выбора месяца и года (премьеры)"""
+    """Клавиатура для выбора месяца и года (премьеры) - 12 месяцев, начиная с 3 месяцев назад"""
     current_date = datetime.now()
     current_year = current_date.year
     current_month = current_date.month
@@ -403,9 +385,7 @@ def get_month_year_keyboard():
     buttons = []
     
     # Создаем список из 12 месяцев, начиная с (текущий месяц - 3)
-    # и заканчивая (текущий месяц + 8) с учетом перехода через год
     for i in range(12):
-        # Вычисляем месяц и год с учетом перехода через декабрь
         month = current_month - 3 + i
         year = current_year
         if month <= 0:
@@ -415,7 +395,6 @@ def get_month_year_keyboard():
             month -= 12
             year += 1
         
-        # Добавляем кнопку месяца
         row_index = i // 4
         if len(buttons) <= row_index:
             buttons.append([])
@@ -696,7 +675,6 @@ class MaxAdapter:
 
         if payload.startswith("premiers_year_"):
             year = int(payload.split("_")[2])
-            # Показываем тот же месяц, но с новым годом
             await event.message.answer(
                 "📅 <b>Выбери месяц для премьер:</b>",
                 parse_mode="html",
@@ -1166,7 +1144,6 @@ class MaxAdapter:
         start_idx = page * items_per_page
         end_idx = min(start_idx + items_per_page, total_movies)
         
-        # Карточки с правильной ссылкой
         for movie_data in movies_list[start_idx:end_idx]:
             movie_details = get_movie_details(movie_data['id'])
             if movie_details:
@@ -1178,7 +1155,6 @@ class MaxAdapter:
                         attachments=[get_opinion_button(movie_details['id'], "search")]
                     )
         
-        # Навигация
         if total_pages > 1:
             pagination = get_pagination_buttons(page, total_pages, "search", current_query)
             await event.message.answer(
@@ -1213,7 +1189,6 @@ class MaxAdapter:
         start_idx = page * items_per_page
         end_idx = min(start_idx + items_per_page, total_movies)
         
-        # Карточки с правильной ссылкой
         for movie_data in movies_list[start_idx:end_idx]:
             movie_details = get_movie_details(movie_data['id'])
             if movie_details:
@@ -1225,7 +1200,6 @@ class MaxAdapter:
                         attachments=[get_opinion_button(movie_details['id'], "premiers")]
                     )
         
-        # Навигация
         if total_pages > 1:
             pagination = get_pagination_buttons(page, total_pages, "premiers", "")
             await event.message.answer(
@@ -1260,7 +1234,6 @@ class MaxAdapter:
         start_idx = page * items_per_page
         end_idx = min(start_idx + items_per_page, total_movies)
         
-        # Карточки с правильной ссылкой
         for movie_data in movies_list[start_idx:end_idx]:
             movie_details = get_movie_details(movie_data['id'])
             if movie_details:
@@ -1272,7 +1245,6 @@ class MaxAdapter:
                         attachments=[get_opinion_button(movie_details['id'], "person")]
                     )
         
-        # Навигация
         if total_pages > 1:
             pagination = get_pagination_buttons(page, total_pages, "search", query)
             await event.message.answer(
@@ -1308,7 +1280,6 @@ class MaxAdapter:
         
         movie_id = movie_details.get('id')
         
-        # Карточка с правильной ссылкой
         card_text, _ = format_movie_card(movie_details)
         if card_text:
             buttons = [
@@ -1350,7 +1321,6 @@ class MaxAdapter:
             f"📝 <b>Мои обращения</b> — скоро здесь появятся твои обращения к тренерам!"
         )
         
-        # Кнопки прилеплены к сообщению профиля
         buttons = [
             [{"type": "callback", "text": "❤️ Любимые фильмы (скоро)", "payload": "favorites_soon"}],
             [{"type": "callback", "text": "📝 Мои обращения (скоро)", "payload": "feedback_soon"}],
@@ -1427,10 +1397,8 @@ class MaxAdapter:
                 )
                 return
             
-            # Отправляем "Дай-ка подумаю..." с автоудалением
             thinking_msg = await event.message.answer("💬 Дай-ка подумаю... 🐾")
             
-            # Автоудаление через 2 секунды
             async def delete_after_delay():
                 await asyncio.sleep(2)
                 try:
@@ -1452,7 +1420,6 @@ class MaxAdapter:
                 if user_id not in ADMIN_IDS:
                     increment_stat_counter(user_id, 'opinion_count')
                 
-                # Ответ с прилепленной кнопкой "В главное меню"
                 keyboard = InlineKeyboardMarkup([
                     [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
                 ])
@@ -1484,6 +1451,7 @@ class MaxAdapter:
             Форматируй ответ красиво:
             - Используй разделы с заголовками
             - Каждый фильм в списке на отдельной строке с эмодзи 🎬
+            - Ссылки на Кинопоиск делай в формате: <a href='https://www.kinopoisk.ru/film/ID/'>Название фильма</a>
             - Добавляй разделители между разделами
             - В конце обязательно добавь рекомендацию "Мой вердикт"
             """
@@ -1498,14 +1466,11 @@ class MaxAdapter:
                 if user_id not in ADMIN_IDS:
                     increment_stat_counter(user_id, 'opinion_count')
                 
-                # Форматируем ответ для лучшей читаемости
                 formatted_response = format_agent_response(response)
                 
-                # Извлекаем ID (максимум 5)
                 movie_ids = extract_movie_ids(response)[:5]
                 logger.info(f"Найдено ID в ответе агента: {movie_ids}")
                 
-                # Собираем фильмы
                 movies_list = []
                 for movie_id in movie_ids:
                     movie_details = get_movie_details(movie_id)
@@ -1514,8 +1479,7 @@ class MaxAdapter:
                     else:
                         logger.warning(f"Фильм с ID {movie_id} не найден в БД")
                 
-                # Показываем отформатированный ответ агента
-                await event.message.answer(formatted_response)
+                await event.message.answer(formatted_response, parse_mode='html')
                 
                 if movies_list:
                     if len(movies_list) < 3:
@@ -1527,7 +1491,6 @@ class MaxAdapter:
                     context['movies'] = movies_list
                     context['query'] = f'актёрский нюх: {query[:30]}...'
                     
-                    # Прилепленные кнопки
                     keyboard = InlineKeyboardMarkup([
                         [{"type": "callback", "text": f"🎬 Показать карточки ({len(movies_list)})", "payload": "agent_show_cards"}],
                         [{"type": "callback", "text": "🐾 Ещё актёрский нюх", "payload": "agent_actor"}],
@@ -1564,6 +1527,7 @@ class MaxAdapter:
             Форматируй ответ красиво:
             - Используй разделы с заголовками
             - Каждый фильм в списке на отдельной строке с эмодзи 🎬
+            - Ссылки на Кинопоиск делай в формате: <a href='https://www.kinopoisk.ru/film/ID/'>Название фильма</a>
             - Добавляй разделители между разделами
             - В конце обязательно добавь рекомендацию "Мой вердикт"
             """
@@ -1578,7 +1542,6 @@ class MaxAdapter:
                 if user_id not in ADMIN_IDS:
                     increment_stat_counter(user_id, 'opinion_count')
                 
-                # Форматируем ответ для лучшей читаемости
                 formatted_response = format_agent_response(response)
                 
                 movie_ids = extract_movie_ids(response)[:5]
@@ -1592,7 +1555,7 @@ class MaxAdapter:
                     else:
                         logger.warning(f"Фильм с ID {movie_id} не найден в БД")
                 
-                await event.message.answer(formatted_response)
+                await event.message.answer(formatted_response, parse_mode='html')
                 
                 if movies_list:
                     if len(movies_list) < 3:
@@ -1649,7 +1612,6 @@ class MaxAdapter:
                 if user_id not in ADMIN_IDS:
                     increment_stat_counter(user_id, 'opinion_count')
                 
-                # Форматируем ответ для лучшей читаемости
                 formatted_response = format_agent_response(response)
                 
                 movie_ids = extract_movie_ids(response)[:5]
@@ -1663,7 +1625,7 @@ class MaxAdapter:
                     else:
                         logger.warning(f"Фильм с ID {movie_id} не найден в БД")
                 
-                await event.message.answer(formatted_response)
+                await event.message.answer(formatted_response, parse_mode='html')
                 
                 if movies_list:
                     context = self._get_user_context(user_id)
@@ -1710,9 +1672,8 @@ class MaxAdapter:
                 if user_id not in ADMIN_IDS:
                     increment_stat_counter(user_id, 'opinion_count')
                 
-                # Форматируем ответ
                 formatted_response = format_agent_response(response)
-                await event.message.answer(formatted_response)
+                await event.message.answer(formatted_response, parse_mode='html')
                 
             except Exception as e:
                 logger.error(f"Ошибка агента: {e}")
@@ -1739,7 +1700,6 @@ class MaxAdapter:
                         attachments=[get_opinion_button(movie_details['id'], "search")]
                     )
         
-        # Очищаем список после показа
         context['movies'] = []
         context['query'] = ''
         
@@ -1758,7 +1718,6 @@ class MaxAdapter:
         user_id = event.message.sender.user_id
         text = event.message.body.text
         
-        # Проверяем лимиты
         if user_id not in ADMIN_IDS:
             limits = get_user_limits(user_id)
             stats = get_user_stats(user_id, date.today().isoformat())
@@ -1769,7 +1728,6 @@ class MaxAdapter:
                 )
                 return
         
-        # Извлекаем ID или название из команды
         parts = text.split(maxsplit=1)
         if len(parts) < 2:
             self._get_user_context(user_id)['state'] = 'awaiting_opinion'
@@ -1780,7 +1738,6 @@ class MaxAdapter:
         await self._process_opinion(event, user_id, query, event.message.answer)
 
     async def _process_opinion(self, event, user_id: int, query: str, send_func):
-        # Пробуем найти по ID
         movie_id = None
         try:
             movie_id = int(query)
@@ -1788,13 +1745,11 @@ class MaxAdapter:
             pass
         
         if movie_id:
-            # Ищем по ID
             movie_details = get_movie_details(movie_id)
             if movie_details:
                 await self._send_opinion_by_id(event, user_id, movie_id, "search", send_func)
                 return
         
-        # Ищем по названию
         search_results = search_movies_in_db(query, limit=5)
         if not search_results:
             await send_func(f"😢 Не нашла фильм «{query}». Попробуй уточнить название.")
@@ -1803,7 +1758,6 @@ class MaxAdapter:
         if len(search_results) == 1:
             await self._send_opinion_by_id(event, user_id, search_results[0]['id'], "search", send_func)
         else:
-            # Показываем несколько вариантов
             text = "🐾 Нашла несколько фильмов. Выбери нужный ID:\n\n"
             for movie in search_results[:5]:
                 text += f"🎬 {movie['title']} ({movie['year']}) — ID: {movie['id']}\n"
@@ -1814,7 +1768,6 @@ class MaxAdapter:
         if send_func is None:
             send_func = event.message.answer
         
-        # Проверяем кэш
         cached = get_cached_opinion(movie_id)
         if cached:
             movie_details = get_movie_details(movie_id)
@@ -1824,13 +1777,11 @@ class MaxAdapter:
                 )
                 return
         
-        # Получаем данные фильма
         movie_details = get_movie_details(movie_id)
         if not movie_details:
             await send_func(f"😢 Не нашла фильм с ID {movie_id}.")
             return
         
-        # Генерируем мнение
         if not ai_client:
             await send_func("😢 Генерация мнения временно недоступна.")
             return
@@ -1838,40 +1789,16 @@ class MaxAdapter:
         await send_func("🐾 Запускаю фильм в ускоренном режиме...")
         
         try:
-            # Формируем промпт для мнения
-            prompt = f"""
-            Ты — КиноИщейка, собака-девочка, которая обожает кино. 🐕
-            
-            Напиши мнение о фильме:
-            Название: {movie_details.get('title', 'Неизвестно')}
-            Год: {movie_details.get('year', 'Неизвестно')}
-            Рейтинг: {movie_details.get('rating', 'Нет')}
-            Жанр: {movie_details.get('genre', 'Неизвестно')}
-            Режиссёр: {movie_details.get('director', 'Неизвестно')}
-            Актеры: {movie_details.get('actors', 'Неизвестно')}
-            
-            Напиши:
-            1. О чём фильм (кратко)
-            2. Какое настроение он создаёт
-            3. Кому понравится
-            4. Твоё личное впечатление (эмоционально, как от друга)
-            
-            Будь живой, используй эмодзи, пиши как в разговоре.
-            """
-            
-            response = await run_agent(prompt, user_id, ai_client, "opinion", chat_mode=True)
-            
-            # Сохраняем в кэш
-            save_opinion_cache(movie_id, response)
-            
-            # Отправляем
-            await self._send_formatted_opinion(
-                send_func, user_id, movie_id, movie_details, response, source
-            )
-            
-            # Увеличиваем счетчик
-            if user_id not in ADMIN_IDS:
-                increment_stat_counter(user_id, 'opinion_count')
+            opinion = await self._generate_opinion(movie_details)
+            if opinion:
+                save_opinion_cache(movie_id, opinion)
+                await self._send_formatted_opinion(
+                    send_func, user_id, movie_id, movie_details, opinion, source
+                )
+                if user_id not in ADMIN_IDS:
+                    increment_stat_counter(user_id, 'opinion_count')
+            else:
+                await send_func("😢 Не удалось сгенерировать мнение.")
             
         except Exception as e:
             logger.error(f"Ошибка генерации мнения: {e}")
@@ -1894,8 +1821,6 @@ class MaxAdapter:
         await send_func(text, parse_mode='html', attachments=[keyboard])
 
     async def _handle_regenerate(self, event, user_id, movie_id, source):
-        """Свежий взгляд — перегенерация мнения"""
-        # Проверяем лимиты для премиум
         limits = get_user_limits(user_id)
         if not _is_premium_tariff(limits.get('tariff_name', '')):
             await event.message.answer(
@@ -1904,7 +1829,6 @@ class MaxAdapter:
             )
             return
         
-        # Проверяем суточный лимит
         stats = get_user_stats(user_id, date.today().isoformat())
         regen_limit = limits.get('regeneration_limit', 0)
         regen_used = stats.get('regeneration_count', 0)
@@ -1916,7 +1840,6 @@ class MaxAdapter:
             )
             return
         
-        # Генерируем новое мнение
         movie_details = get_movie_details(movie_id)
         if not movie_details:
             await event.message.answer(f"😢 Не нашла фильм с ID {movie_id}.")
@@ -1929,44 +1852,113 @@ class MaxAdapter:
         await event.message.answer("🔄 Генерирую свежий взгляд...")
         
         try:
-            prompt = f"""
-            Ты — КиноИщейка, собака-девочка, которая обожает кино. 🐕
-            
-            Напиши СВЕЖЕЕ, НОВОЕ мнение о фильме:
-            Название: {movie_details.get('title', 'Неизвестно')}
-            Год: {movie_details.get('year', 'Неизвестно')}
-            Рейтинг: {movie_details.get('rating', 'Нет')}
-            Жанр: {movie_details.get('genre', 'Неизвестно')}
-            Режиссёр: {movie_details.get('director', 'Неизвестно')}
-            Актеры: {movie_details.get('actors', 'Неизвестно')}
-            
-            Напиши СОВСЕМ ПО-НОВОМУ:
-            1. О чём фильм (кратко, другими словами)
-            2. Какое настроение он создаёт
-            3. Кому понравится
-            4. Твоё личное впечатление (эмоционально, как от друга)
-            
-            Будь живой, используй эмодзи, пиши как в разговоре.
-            Ответь по-другому, чем в прошлый раз!
-            """
-            
-            response = await run_agent(prompt, user_id, ai_client, "opinion", chat_mode=True)
-            
-            # Обновляем кэш
-            save_opinion_cache(movie_id, response)
-            
-            # Увеличиваем счетчик перегенераций
-            if user_id not in ADMIN_IDS:
-                increment_stat_counter(user_id, 'regeneration_count')
-            
-            # Отправляем
-            await self._send_formatted_opinion(
-                event.message.answer, user_id, movie_id, movie_details, response, source
-            )
+            opinion = await self._generate_opinion(movie_details, force_regenerate=True)
+            if opinion:
+                save_opinion_cache(movie_id, opinion)
+                if user_id not in ADMIN_IDS:
+                    increment_stat_counter(user_id, 'regeneration_count')
+                await self._send_formatted_opinion(
+                    event.message.answer, user_id, movie_id, movie_details, opinion, source
+                )
+            else:
+                await event.message.answer("😢 Не удалось сгенерировать новое мнение.")
             
         except Exception as e:
             logger.error(f"Ошибка перегенерации: {e}")
             await event.message.answer("🐾 Гав! Я запуталась в проводах. Попробуй позже!")
+
+    async def _generate_opinion(self, movie_details, force_regenerate=False):
+        """Генерирует мнение о фильме через DeepSeek"""
+        title = movie_details.get('name', 'Без названия')
+        year = movie_details.get('year', '')
+        
+        countries = movie_details.get('countries', [])
+        countries_str = ', '.join(countries) if countries else 'неизвестно'
+        
+        genres = movie_details.get('genres', [])
+        genres_str = ', '.join(genres) if genres else 'неизвестно'
+        
+        directors_list = movie_details.get('directors', [])
+        if directors_list:
+            director_names = []
+            for director in directors_list:
+                name = director.get('name') or director.get('enName')
+                if name:
+                    director_names.append(name)
+            directors_str = ', '.join(director_names)
+        else:
+            directors_str = 'неизвестен'
+        
+        actors_list = movie_details.get('actors', [])[:7]
+        if actors_list:
+            actor_names = []
+            for actor in actors_list:
+                name = actor.get('name') or actor.get('enName')
+                if name:
+                    actor_names.append(name)
+            actors_str = '\n'.join([f"• {name}" for name in actor_names])
+        else:
+            actors_str = 'не указаны'
+        
+        rating = movie_details.get('rating', 0)
+        description = movie_details.get('description', 'Описание отсутствует')
+        if description and len(description) > 800:
+            description = description[:800] + '...'
+
+        prompt = f"""Ты — КиноИщейка, собака-девочка, кинокритик с отличным чутьем на хорошее кино. Ты смотришь фильмы и делишься своим мнением с юмором и энтузиазмом. Говори о себе в женском роде.
+
+Информация о фильме:
+🎬 Название: {title} ({year})
+🌍 Страна: {countries_str}
+🎭 Жанр: {genres_str}
+🎥 Режиссер: {directors_str}
+⭐ Рейтинг Кинопоиска: {rating}
+👥 В главных ролях:
+{actors_str}
+
+📝 Сюжет:
+{description}
+
+Требования к ответу:
+1. Объем: 10-12 предложений
+2. Без markdown-разметки
+3. Только обычный текст
+4. Разделяй части мнения переносами строк
+5. Добавь собачий юмор
+6. Говори о себе в женском роде
+7. НЕ используй вводные фразы типа "Я посмотрела фильм и вот что думаю" - сразу начинай с содержательной части
+8. Не благодари за замечания и не упоминай, что это исправленная версия - просто напиши новое мнение
+
+Расскажи о:
+- Настроении и смысле фильма
+- Наградах (с учетом страны производства, если знаешь точно, а если нет - просто не упоминай, не выдумывай!)
+- Особенностях
+- Почему стоит посмотреть
+- Плюсах и минусах
+
+В конце обязательно добавь:
+Оценка: от 5 до 10 (краткий комментарий почему)
+
+После оценки добавь:
+Настроение: 5 хэштегов (например #Радость #Грусть #Вдохновение #Ностальгия #Уют)
+Атмосфера: 5 хэштегов (например #Мрачность #Яркость #Теплота #Напряжение #Сюрреализм)"""
+
+        if force_regenerate:
+            prompt += "\n\n⚠️ Это свежий взгляд на тот же фильм. Постарайся найти новые детали, которые не упоминались в предыдущем мнении. Сделай акцент на других аспектах фильма, персонажах, режиссёрских приёмах или скрытых смыслах. Не повторяй то, что уже было сказано."
+
+        try:
+            response = ai_client.chat.completions.create(
+                model="deepseek-chat",
+                messages=[
+                    {"role": "system", "content": "Ты — КиноИщейка, собака-девочка, кинокритик. Твои ответы должны быть дружелюбными, с юмором, но при этом информативными. Обязательно используй женский род: 'я посмотрела', 'мне понравилось', 'я нашла' и т.д."},
+                    {"role": "user", "content": prompt}
+                ],
+                timeout=180
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            logger.error(f"Ошибка генерации мнения: {e}")
+            return None
 
     # ===== ПОИСК =====
     async def _perform_search(self, event, user_id, query):
@@ -2034,10 +2026,8 @@ class MaxAdapter:
         feedback_type = context.get('feedback_type', 1)
         movie_id = context.get('feedback_movie_id')
         
-        # Сохраняем обратную связь
         save_feedback(user_id, feedback_type, movie_id, text)
         
-        # Очищаем контекст
         context.pop('feedback_type', None)
         context.pop('feedback_movie_id', None)
         context.pop('state', None)
@@ -2051,10 +2041,8 @@ class MaxAdapter:
     async def _process_feedback_review(self, event, user_id, text):
         context = self._get_user_context(user_id)
         
-        # Сохраняем отзыв
         save_feedback(user_id, 2, None, text)
         
-        # Очищаем контекст
         context.pop('feedback_type', None)
         context.pop('state', None)
         
@@ -2064,7 +2052,7 @@ class MaxAdapter:
             attachments=[get_feedback_menu()]
         )
 
-    # ==================== ЗАПУСК БОТА ====================
+    # ==================== ЗАПУСК ====================
     async def run(self):
         """Запускает бота"""
         logger.info("🚀 Запуск Max-бота...")
