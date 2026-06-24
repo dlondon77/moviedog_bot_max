@@ -1,4 +1,5 @@
-# core/movie.py
+# core/movie.py — ДОПОЛНЕННАЯ ВЕРСИЯ (добавлена функция format_missing_movie_card)
+
 import sqlite3
 import logging
 import random
@@ -356,7 +357,6 @@ def format_movie_card(movie, is_premiers=False, query=None, is_person_search=Fal
             )
         
         poster_url = movie.get('poster_url', f"https://st.kp.yandex.net/images/film_big/{movie_id}.jpg")
-        # ПРАВИЛЬНАЯ ССЫЛКА НА КИНОПОИСК С ПОЛНЫМ URL
         kp_url = f"https://www.kinopoisk.ru/film/{movie_id}/" if movie_id else "https://www.kinopoisk.ru/"
         
         card = (
@@ -377,7 +377,31 @@ def format_movie_card(movie, is_premiers=False, query=None, is_person_search=Fal
     except Exception as e:
         logger.error(f"Ошибка форматирования карточки фильма: {e}")
         return None, None
-        
+
+
+def format_missing_movie_card(movie_id: int, movie_name: str = None) -> str:
+    """
+    Создаёт карточку-заглушку для фильма, которого нет в БД
+    """
+    kp_url = f"https://www.kinopoisk.ru/film/{movie_id}/"
+    
+    if not movie_name:
+        movie_name = f"Фильм (ID: {movie_id})"
+    
+    card = (
+        f"🎬 <b>{movie_name}</b>\n"
+        f"📁 Тип: <b>фильм</b>\n"
+        f"⭐ Рейтинг Кинопоиска: <b>неизвестен</b>\n"
+        f"🌍 Страна: <b>неизвестна</b>\n"
+        f"🎭 Жанр: <b>неизвестен</b>\n\n"
+        f"📝 <b>Описание:</b>\n"
+        f"<i>Этот фильм пока не загружен в мою базу данных. 🐾</i>\n\n"
+        f"🔗 <a href='{kp_url}'>Смотреть на Кинопоиске</a>"
+    )
+    
+    return card
+
+
 def search_movies_with_filters(query, filters=None, count_only=False):
     """Поиск фильмов с фильтрами"""
     all_movies = search_movies_in_db(query, min_rating=0.0, max_rating=10.0)
