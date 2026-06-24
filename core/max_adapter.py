@@ -22,6 +22,7 @@ import sys
 import re
 import asyncio
 from datetime import date, datetime, timedelta
+from typing import List, Dict
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CORE_DIR = os.path.join(BASE_DIR, 'core')
