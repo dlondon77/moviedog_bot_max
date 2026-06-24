@@ -1,4 +1,8 @@
-# core/agent.py — С ПОДДЕРЖКОЙ КОНТЕКСТА, ПРЕДПОЧТЕНИЙ И ЗАПРЕТОМ ПОВТОРА
+# core/agent.py — ОПТИМИЗИРОВАННАЯ ВЕРСИЯ
+# Вся ИИ-логика вынесена сюда. max_adapter.py только вызывает run_agent()
+# + Режимные промпты (recommend, actor, plot_search, compare, chat)
+# + format_response() — чистка ответов
+# + Мнение о фильме НЕ ЗДЕСЬ (остаётся в max_adapter.py)
 
 import json
 import logging
@@ -22,12 +26,6 @@ def clear_chat_history(user_id: int):
 def get_chat_history(user_id: int) -> list:
     return CHAT_HISTORY.get(user_id, [])
 
-def add_to_history(user_id: int, role: str, content: str):
-    """Добавляет сообщение в историю диалога"""
-    CHAT_HISTORY.setdefault(user_id, []).append({"role": role, "content": content})
-    if len(CHAT_HISTORY[user_id]) > MAX_HISTORY_LENGTH * 2:
-        CHAT_HISTORY[user_id] = CHAT_HISTORY[user_id][-MAX_HISTORY_LENGTH * 2:]
-
 
 # ==================== СИСТЕМНЫЙ ПРОМПТ ====================
 
@@ -37,23 +35,20 @@ SYSTEM_PROMPT = """Ты — КиноИщейка, собака-девочка, �
 НЕ используй маркдаун-разметку (** для жирного, * для курсива).
 НЕ используй длинные линии-разделители (━, —, ─, ===, ***).
 НЕ пиши служебные фразы: "Сначала найду ID", "Отлично! Теперь сравню", "Ого, какие данные".
-НЕ ПРЕДЛАГАЙ СОХРАНЯТЬ ФИЛЬМЫ В ЛЮБИМЫЕ — эта функция доступна через кнопки в карточке фильма!
 
 КОГДА ДАЁШЬ СПИСОК ФИЛЬМОВ — ВСЕГДА УКАЗЫВАЙ ID В ФОРМАТЕ (ID: число)!
-ID должен быть в конце строки с фильмом, после ссылки.
 ЭТО ОБЯЗАТЕЛЬНО для работы кнопки "Показать карточки"!
+ID нужны в ответе, но они будут скрыты от пользователя позже.
 
 Формат ссылки на фильм:
-<a href='https://www.kinopoisk.ru/film/[ID]/'>Название фильма</a> (Год) ⭐ Рейтинг (ID: число)
+<a href='https://www.kinopoisk.ru/film/[ID]/'>Название фильма</a> (Год) ⭐ Рейтинг
 
 Пример правильного ответа:
 🎬 <a href='https://www.kinopoisk.ru/film/447301/'>Начало</a> (2010) ⭐ 8.6 (ID: 447301)
 
 Говори о себе в женском роде, с юмором и энтузиазмом.
 Используй переносы строк для структуры.
-Всегда старайся дать полезные и конкретные рекомендации.
-НЕ спрашивай пользователя, хочет ли он сохранить фильм в любимые.
-НЕ предлагай сохранять фильмы в любимые."""
+Всегда старайся дать полезные и конкретные рекомендации."""
 
 
 CHAT_SYSTEM_PROMPT = """Ты — КиноИщейка, собака-девочка, кинокритик. 🐕
@@ -63,30 +58,21 @@ CHAT_SYSTEM_PROMPT = """Ты — КиноИщейка, собака-девочк
 Давай интересные факты, шутки, забавные детали о фильмах и актёрах.
 
 НЕ делай подборки и сравнения — это не твоя задача сейчас.
-НЕ предлагай сохранять фильмы в любимые — эта функция доступна через кнопки в карточке фильма!
 
 Если пользователь просит найти фильм, подобрать по жанру или сравнить — скажи, что для этого есть специальные команды, и предложи выбрать нужную.
+
+Пример ответа, если запрос похож на стандартную функцию:
+"Ой, я чувствую, что тут пахнет поиском! 🔍 Для поиска фильмов лучше использовать /search, а для поиска по актёрам — /person. Хочешь, я подскажу что-то интересное о кино вместо этого?"
 """
 
 
 # ==================== РЕЖИМНЫЕ ПРОМПТЫ ====================
 
-def get_recommend_prompt(query: str, exclude_ids: List[int] = None, context: str = None) -> str:
-    """Формирует промпт для режима 'Подобрать фильм'"""
-    exclude_text = ""
-    if exclude_ids:
-        exclude_text = f"\n\n🚫 НЕ ПРЕДЛАГАЙ фильмы с этими ID: {exclude_ids}\nЭти фильмы уже показывали пользователю. Предложи новые, другие варианты!"
-    
-    context_text = ""
-    if context:
-        context_text = f"\n\n📝 Контекст предыдущего диалога:\n{context}\n\nУчитывай, что мы уже обсуждали, и не повторяйся."
-    
+def get_recommend_prompt(query: str) -> str:
     return f"""
 Ты — КиноИщейка, собака-девочка, кинокритик. 🐕
 
 Пользователь просит подборку фильмов: {query}
-{context_text}
-{exclude_text}
 
 Твоя задача:
 1. Найди от 3 до 5 фильмов, которые идеально подходят под запрос
@@ -94,29 +80,16 @@ def get_recommend_prompt(query: str, exclude_ids: List[int] = None, context: str
 3. Учти жанр, настроение, стиль, если пользователь указал
 4. В конце дай совет, с какого фильма начать
 
-ОБЯЗАТЕЛЬНО указывай ID каждого фильма в формате (ID: число) в конце строки!
+ОБЯЗАТЕЛЬНО указывай ID каждого фильма в формате (ID: число).
 НЕ используй длинные линии-разделители.
-НЕ предлагай сохранять фильмы в любимые — эта функция доступна через кнопки в карточке фильма!
 Форматируй ответ красиво, с эмодзи и переносами строк.
 """
 
-
-def get_actor_prompt(query: str, exclude_ids: List[int] = None, context: str = None) -> str:
-    """Формирует промпт для режима 'Актёрский нюх'"""
-    exclude_text = ""
-    if exclude_ids:
-        exclude_text = f"\n\n🚫 НЕ ПРЕДЛАГАЙ фильмы с этими ID: {exclude_ids}\nЭти фильмы уже показывали пользователю. Предложи новые, другие варианты!"
-    
-    context_text = ""
-    if context:
-        context_text = f"\n\n📝 Контекст предыдущего диалога:\n{context}\n\nУчитывай, что мы уже обсуждали, и не повторяйся."
-    
+def get_actor_prompt(query: str) -> str:
     return f"""
 Ты — КиноИщейка, кинокритик с отличным нюхом на таланты. 🐕
 
 Пользователь спрашивает о персоне: {query}
-{context_text}
-{exclude_text}
 
 Найди в базе этого актёра или режиссёра и сделай разбор:
 1. Лучшие роли/работы (с рейтингом и кратким объяснением)
@@ -124,84 +97,62 @@ def get_actor_prompt(query: str, exclude_ids: List[int] = None, context: str = N
 3. Учти период и жанр, если указаны
 4. В конце дай рекомендацию
 
-ОБЯЗАТЕЛЬНО указывай ID каждого фильма в формате (ID: число) в конце строки!
+ОБЯЗАТЕЛЬНО указывай ID каждого фильма в формате (ID: число).
 НЕ используй длинные линии-разделители.
-НЕ предлагай сохранять фильмы в любимые — эта функция доступна через кнопки в карточке фильма!
 Форматируй ответ красиво, с эмодзи и переносами строк.
 """
 
-
-def get_plot_prompt(query: str, exclude_ids: List[int] = None, context: str = None) -> str:
-    """Формирует промпт для режима 'По сюжету'"""
-    exclude_text = ""
-    if exclude_ids:
-        exclude_text = f"\n\n🚫 НЕ ПРЕДЛАГАЙ фильмы с этими ID: {exclude_ids}\nЭти фильмы уже показывали пользователю. Предложи новые, другие варианты!"
-    
-    context_text = ""
-    if context:
-        context_text = f"\n\n📝 Контекст предыдущего диалога:\n{context}\n\nУчитывай, что мы уже обсуждали, и не повторяйся."
-    
+def get_plot_prompt(query: str) -> str:
     return f"""
 Ты — КиноИщейка, собака-девочка с отличным нюхом на сюжеты. 🐕
 
 Пользователь описал, что хочет посмотреть: {query}
-{context_text}
-{exclude_text}
 
 Найди 3 фильма, которые лучше всего подходят под это описание.
 Для каждого: название (год), рейтинг, краткое объяснение, почему он подходит.
 В конце посоветуй, с какого начать.
 
-ОБЯЗАТЕЛЬНО указывай ID каждого фильма в формате (ID: число) в конце строки!
+ОБЯЗАТЕЛЬНО указывай ID каждого фильма в формате (ID: число).
 НЕ используй длинные линии-разделители.
-НЕ предлагай сохранять фильмы в любимые — эта функция доступна через кнопки в карточке фильма!
 Форматируй ответ красиво, с эмодзи и переносами строк.
 """
 
-
-def get_compare_prompt(query: str, exclude_ids: List[int] = None, context: str = None) -> str:
-    """Формирует промпт для режима 'Сравнить фильмы'"""
-    exclude_text = ""
-    if exclude_ids:
-        exclude_text = f"\n\n🚫 НЕ ПРЕДЛАГАЙ фильмы с этими ID: {exclude_ids}\nЭти фильмы уже показывали пользователю. Предложи новые, другие варианты!"
-    
-    context_text = ""
-    if context:
-        context_text = f"\n\n📝 Контекст предыдущего диалога:\n{context}\n\nУчитывай, что мы уже обсуждали, и не повторяйся."
-    
+def get_compare_prompt(query: str) -> str:
     return f"""
 Ты — КиноИщейка. Сравни фильмы: {query}
-{context_text}
-{exclude_text}
 
 Важно:
 - НЕ пиши "Сначала найду ID", "Отлично! Теперь сравню", "Ого, какие данные"
 - НЕ используй линии-разделители
-- НЕ предлагай сохранять фильмы в любимые — эта функция доступна через кнопки в карточке фильма!
 - Сразу переходи к сравнению
-- Укажи ID фильмов в формате (ID: число) в конце строки!
+- Укажи ID фильмов в формате (ID: число)
 - В конце добавь рекомендацию
 
 Сравни: рейтинги, жанры, режиссёров, актёров, какой лучше и почему.
 """
 
-
 def get_chat_prompt(query: str) -> str:
-    return f"Ответь коротко (2-3 предложения) и интересно. НЕ предлагай сохранять фильмы в любимые — эта функция доступна через кнопки в карточке фильма: {query}"
+    return f"Ответь коротко (2-3 предложения) и интересно: {query}"
 
 
 # ==================== ФОРМАТИРОВАНИЕ ОТВЕТА ====================
 
 def format_response(response: str) -> str:
-    """Форматирует ответ агента — скрывает ID, но оставляет их в скрытом виде"""
+    """Форматирует ответ агента — убирает ID, линии и служебные фразы"""
     if not response:
         return response
     
     # Убираем множественные переносы
     response = re.sub(r'\n{3,}', '\n\n', response)
     
-    # Скрываем ID в HTML-комментарии, но не удаляем
-    response = re.sub(r'\(ID:\s*(\d+)\)', r'<!--ID:\1-->', response)
+    # Убираем ID из текста
+    response = re.sub(r'\s*\(ID:\s*\d+\)', '', response)
+    response = re.sub(r'\s*ID:\s*\d+', '', response)
+    response = re.sub(r'\(ID:\d+\)', '', response)
+    
+    # Убираем дублирующиеся эмодзи
+    response = re.sub(r'🎬\s*🎬', '🎬', response)
+    response = re.sub(r'⭐\s*⭐', '⭐', response)
     
     # Убираем служебные фразы для сравнения
     response = re.sub(r'Сначала найду ID[^.]*\.', '', response)
@@ -219,42 +170,6 @@ def format_response(response: str) -> str:
     response = re.sub(r'\n{3,}', '\n\n', response)
     
     return response.strip()
-
-
-def extract_movie_ids(text: str) -> List[int]:
-    """Извлекает ID фильмов из ответа агента — приоритет у ссылок"""
-    ids = []
-    
-    # ПАТТЕРН 1: ссылка на Кинопоиск (САМЫЙ НАДЁЖНЫЙ!)
-    pattern_link = r'https?://www\.kinopoisk\.ru/(?:film|series)/(\d+)/'
-    link_matches = re.findall(pattern_link, text)
-    for m in link_matches:
-        ids.append(int(m))
-    
-    # Если нашли ID в ссылках — возвращаем их (они самые надёжные)
-    if ids:
-        return list(set(ids))
-    
-    # ПАТТЕРН 2: скрытые ID в HTML-комментариях <!--ID:123-->
-    pattern_comment = r'<!--ID:(\d+)-->'
-    matches = re.findall(pattern_comment, text)
-    for m in matches:
-        ids.append(int(m))
-    
-    # ПАТТЕРН 3: (ID: 123) — если остались
-    pattern = r'\(ID:\s*(\d+)\)'
-    matches = re.findall(pattern, text)
-    for m in matches:
-        ids.append(int(m))
-    
-    # ПАТТЕРН 4: просто число в скобках (4-7 цифр, не год)
-    pattern3 = r'\((\d{4,7})\)'
-    matches3 = re.findall(pattern3, text)
-    for m in matches3:
-        if len(m) >= 4 and int(m) > 1900:
-            ids.append(int(m))
-    
-    return list(set(ids))
 
 
 # ==================== ИНСТРУМЕНТЫ ====================
@@ -711,20 +626,30 @@ def _clean_markdown(text: str) -> str:
     return text
 
 
-def _build_context_from_history(user_id: int, max_messages: int = 4) -> str:
-    """Строит контекст из истории диалога для передачи в промпт"""
-    history = CHAT_HISTORY.get(user_id, [])
-    if not history:
-        return ""
+def extract_movie_ids(text: str) -> List[int]:
+    """Извлекает ID фильмов из ответа агента"""
+    ids = []
     
-    recent = history[-max_messages:] if len(history) > max_messages else history
+    # Паттерн 1: (ID: 123)
+    pattern = r'\(ID:\s*(\d+)\)'
+    matches = re.findall(pattern, text)
+    for m in matches:
+        ids.append(int(m))
     
-    context_lines = []
-    for msg in recent:
-        role = "Пользователь" if msg["role"] == "user" else "КиноИщейка"
-        context_lines.append(f"{role}: {msg['content'][:200]}...")
+    # Паттерн 2: ссылка на Кинопоиск
+    pattern2 = r'https?://www\.kinopoisk\.ru/film/(\d+)/'
+    url_matches = re.findall(pattern2, text)
+    for m in url_matches:
+        ids.append(int(m))
     
-    return "\n".join(context_lines)
+    # Паттерн 3: просто число в скобках, похожее на ID (4-7 цифр, не год)
+    pattern3 = r'\((\d{4,7})\)'
+    matches3 = re.findall(pattern3, text)
+    for m in matches3:
+        if len(m) >= 4 and int(m) > 1900:
+            ids.append(int(m))
+    
+    return list(set(ids))  # удаляем дубликаты
 
 
 # ==================== ГЛАВНЫЙ ЦИКЛ ====================
@@ -734,10 +659,7 @@ async def run_agent(
     user_id: int, 
     ai_client, 
     agent_mode: str = 'chat', 
-    chat_mode: bool = False,
-    exclude_ids: List[int] = None,
-    use_context: bool = True,
-    preferences: Dict = None
+    chat_mode: bool = False
 ) -> str:
     """
     Запускает агента с учётом режима.
@@ -748,21 +670,8 @@ async def run_agent(
     - plot_search: поиск по сюжету
     - compare: сравнение фильмов
     - chat: свободный диалог (короткие ответы)
-    
-    Параметры:
-    - exclude_ids: ID фильмов, которые уже показывали (запрет повтора)
-    - use_context: использовать ли историю диалога
-    - preferences: предпочтения пользователя
     """
-    # Строим контекст из истории
-    context_text = ""
-    if use_context:
-        context_text = _build_context_from_history(user_id, max_messages=4)
-    
-    # Форматируем предпочтения в текст
-    prefs_text = ""
-    if preferences:
-        prefs_text = user_module.format_preferences_text(preferences)
+    history = CHAT_HISTORY.get(user_id, [])
     
     # Выбираем системный промпт
     if agent_mode == 'chat' or chat_mode:
@@ -772,31 +681,25 @@ async def run_agent(
     
     # Выбираем промпт в зависимости от режима
     if agent_mode == 'recommend':
-        final_query = get_recommend_prompt(user_query, exclude_ids, context_text)
+        final_query = get_recommend_prompt(user_query)
     elif agent_mode == 'actor':
-        final_query = get_actor_prompt(user_query, exclude_ids, context_text)
+        final_query = get_actor_prompt(user_query)
     elif agent_mode == 'plot_search':
-        final_query = get_plot_prompt(user_query, exclude_ids, context_text)
+        final_query = get_plot_prompt(user_query)
     elif agent_mode == 'compare':
-        final_query = get_compare_prompt(user_query, exclude_ids, context_text)
+        final_query = get_compare_prompt(user_query)
     elif agent_mode == 'chat' or chat_mode:
         final_query = get_chat_prompt(user_query)
     else:
+        # fallback — используем user_query как есть
         final_query = user_query
-    
-    # Добавляем предпочтения в запрос (кроме режима chat)
-    if prefs_text and agent_mode not in ['chat']:
-        final_query = final_query + prefs_text
     
     messages = [
         {"role": "system", "content": system_prompt}
     ]
     
-    # Добавляем историю (кроме режима chat, там своя логика)
-    if agent_mode != 'chat' and not chat_mode:
-        history = CHAT_HISTORY.get(user_id, [])
-        if history:
-            messages.extend(history[-MAX_HISTORY_LENGTH:])
+    if history:
+        messages.extend(history[-MAX_HISTORY_LENGTH:])
     
     messages.append({"role": "user", "content": final_query})
     
@@ -838,11 +741,15 @@ async def run_agent(
             raw_response = message.content
             clean_response = _clean_markdown(raw_response)
             
+            # Форматируем ответ (убираем ID и линии)
             formatted_response = format_response(clean_response)
             
-            # Сохраняем историю (для всех режимов)
-            add_to_history(user_id, "user", user_query)
-            add_to_history(user_id, "assistant", formatted_response)
+            # Сохраняем историю
+            CHAT_HISTORY.setdefault(user_id, []).append({"role": "user", "content": user_query})
+            CHAT_HISTORY[user_id].append({"role": "assistant", "content": formatted_response})
+            
+            if len(CHAT_HISTORY[user_id]) > MAX_HISTORY_LENGTH * 2:
+                CHAT_HISTORY[user_id] = CHAT_HISTORY[user_id][-MAX_HISTORY_LENGTH * 2:]
             
             return formatted_response
     
