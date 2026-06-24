@@ -197,12 +197,11 @@ def record_user_opinion(user_id: int, movie_id: int, opinion_text: str = '') -> 
 # ==================== ЛЮБИМЫЕ ФИЛЬМЫ ====================
 
 def add_favorite_movie(user_id: int, movie_id: int, rating: int = 0, review: str = '') -> bool:
-    """Добавляет фильм в любимые"""
-    # Проверяем, есть ли фильм в БД
-    movie = movie_module.get_movie_details(movie_id)
-    if not movie:
-        logger.warning(f"Фильм {movie_id} не найден в БД")
-        return False
+    # Проверяем, есть ли фильм в БД (ВРЕМЕННО ОТКЛЮЧЕНО)
+    # movie = movie_module.get_movie_details(movie_id)
+    # if not movie:
+    #     logger.warning(f"Фильм {movie_id} не найден в БД")
+    #     return False
     
     conn = db.get_opinions_db_connection()
     cursor = conn.cursor()
@@ -308,11 +307,10 @@ def get_favorite_ids(user_id: int) -> List[int]:
 # ==================== СПИСОК "БУДУ СМОТРЕТЬ" ====================
 
 def add_to_watchlist(user_id: int, movie_id: int, status: str = 'planned') -> bool:
-    """Добавляет фильм в список 'Буду смотреть'"""
-    movie = movie_module.get_movie_details(movie_id)
-    if not movie:
-        logger.warning(f"Фильм {movie_id} не найден в БД")
-        return False
+    # movie = movie_module.get_movie_details(movie_id)
+    # if not movie:
+    #     logger.warning(f"Фильм {movie_id} не найден в БД")
+    #     return False
     
     conn = db.get_opinions_db_connection()
     cursor = conn.cursor()
@@ -422,11 +420,10 @@ def get_watchlist_ids(user_id: int) -> List[int]:
 # ==================== "НЕ ПОНРАВИЛОСЬ" ====================
 
 def add_disliked_movie(user_id: int, movie_id: int, reason: str = '') -> bool:
-    """Добавляет фильм в список 'Не понравилось'"""
-    movie = movie_module.get_movie_details(movie_id)
-    if not movie:
-        logger.warning(f"Фильм {movie_id} не найден в БД")
-        return False
+    # movie = movie_module.get_movie_details(movie_id)
+    # if not movie:
+    #     logger.warning(f"Фильм {movie_id} не найден в БД")
+    #     return False
     
     conn = db.get_opinions_db_connection()
     cursor = conn.cursor()
