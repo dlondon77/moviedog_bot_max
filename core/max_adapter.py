@@ -1570,8 +1570,9 @@ class MaxAdapter:
 
     # ==================== ОБРАБОТЧИКИ КОМАНД ====================
     async def _handle_random(self, event: MessageCreated):
+        user_id = event.message.sender.user_id
         await event.message.answer("🎲 Ищу случайный фильм...")
-        await self._send_random_result(event.message.answer)
+        await self._send_random_result(event.message.answer, user_id)
 
     async def _send_random_result(self, send_func):
         movie_data = get_random_movie_from_db(min_rating=7.0, is_new_only=False)
