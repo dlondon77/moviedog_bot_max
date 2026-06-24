@@ -1574,7 +1574,7 @@ class MaxAdapter:
         await event.message.answer("🎲 Ищу случайный фильм...")
         await self._send_random_result(event.message.answer, user_id)
 
-    async def _send_random_result(self, send_func):
+    async def _send_random_result(self, send_func, user_id: int = None):
         movie_data = get_random_movie_from_db(min_rating=7.0, is_new_only=False)
         if not movie_data:
             await send_func("😢 Не нашла фильмов.")
@@ -1588,13 +1588,18 @@ class MaxAdapter:
         
         card_text, _ = format_movie_card(movie_details)
         if card_text:
-            action_buttons = get_movie_action_buttons(movie_id, user_id)
+            # Базовые кнопки
             buttons = [
                 [{"type": "callback", "text": "🐾 Мнение о фильме", "payload": f"opinion_{movie_id}_random"}],
                 [{"type": "callback", "text": "🎲 Новый случайный", "payload": "random"}],
                 [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
             ]
-            buttons = buttons + action_buttons.buttons
+            
+            # Добавляем кнопки действий, если есть user_id
+            if user_id:
+                action_buttons = get_movie_action_buttons(movie_id, user_id)
+                buttons = buttons + action_buttons.buttons
+            
             keyboard = InlineKeyboardMarkup(buttons)
             await send_func(card_text, parse_mode='html', attachments=[keyboard])
         else:
