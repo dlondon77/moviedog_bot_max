@@ -174,7 +174,7 @@ def init_db():
         )
     ''')
     
-    # Таблица мнений пользователей о фильмах
+    # Таблица мнений пользователей о фильмах (для истории)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS user_movie_opinions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -186,7 +186,9 @@ def init_db():
         )
     ''')
     
-    # Таблица любимых фильмов
+    # ==================== НОВЫЕ ТАБЛИЦЫ ====================
+    
+    # Таблица любимых фильмов (с рейтингом пользователя)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS favorite_movies (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -223,7 +225,7 @@ def init_db():
         )
     ''')
     
-    # Таблица истории просмотров
+    # Таблица истории просмотров (для будущей персонализации)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS watch_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -231,28 +233,6 @@ def init_db():
             movie_id INTEGER NOT NULL,
             watched_at TEXT NOT NULL,
             UNIQUE(user_id, movie_id)
-        )
-    ''')
-    
-    # Таблица кинопрофиля
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS user_cinema_profile (
-            user_id INTEGER PRIMARY KEY,
-            profile_json TEXT NOT NULL,
-            last_updated TEXT NOT NULL,
-            version INTEGER DEFAULT 1
-        )
-    ''')
-    
-    # Таблица истории запросов (для анализа)
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS user_query_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            query TEXT NOT NULL,
-            agent_mode TEXT,
-            response TEXT,
-            created_at TEXT NOT NULL
         )
     ''')
     
