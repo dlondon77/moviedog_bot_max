@@ -1539,7 +1539,6 @@ class MaxAdapter:
         
         movie_id = movie_details.get('id')
         
-        # Получаем карточку
         card_text, _ = format_movie_card(movie_details)
         if not card_text:
             await send_func("😢 Не могу показать карточку.")
