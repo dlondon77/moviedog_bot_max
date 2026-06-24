@@ -1515,35 +1515,43 @@ class MaxAdapter:
         await event.message.answer("🎲 Ищу случайный фильм...")
         await self._send_random_result(event.message.answer)
 
-    async def _send_random_result(self, send_func):
+    async def _send_random_result(self, send_func, user_id: int):
+        """Отправляет случайный фильм с кнопками"""
         movie_data = get_random_movie_from_db(min_rating=7.0, is_new_only=False)
         if not movie_data:
             await send_func("😢 Не нашла фильмов.")
             return
+        
         movie_details = get_movie_details(movie_data['id'])
         if not movie_details:
             await send_func("😢 Не могу найти информацию о фильме.")
             return
         
         movie_id = movie_details.get('id')
-        user_id = send_func.__self__ if hasattr(send_func, '__self__') else None
         
+        # Получаем карточку
         card_text, _ = format_movie_card(movie_details)
-        if card_text:
-            # Кнопки действий
-            action_buttons = get_movie_action_buttons(movie_id, user_id)
-            # Базовые кнопки
-            buttons = [
-                [{"type": "callback", "text": "🐾 Мнение о фильме", "payload": f"opinion_{movie_id}_random"}],
-                [{"type": "callback", "text": "🎲 Новый случайный", "payload": "random"}],
-                [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
-            ]
-            # Добавляем кнопки действий
-            buttons = buttons + action_buttons.buttons
-            keyboard = InlineKeyboardMarkup(buttons)
-            await send_func(card_text, parse_mode='html', attachments=[keyboard])
-        else:
+        if not card_text:
             await send_func("😢 Не могу показать карточку.")
+            return
+        
+        # Базовые кнопки
+        buttons = [
+            [{"type": "callback", "text": "🐾 Мнение о фильме", "payload": f"opinion_{movie_id}_random"}],
+            [{"type": "callback", "text": "🎲 Новый случайный", "payload": "random"}],
+            [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
+        ]
+        
+        # Добавляем кнопки действий
+        try:
+            action_buttons = get_movie_action_buttons(movie_id, user_id)
+            if action_buttons and action_buttons.buttons:
+                buttons = buttons + action_buttons.buttons
+        except Exception as e:
+            logger.error(f"Ошибка получения кнопок действий: {e}")
+        
+        keyboard = InlineKeyboardMarkup(buttons)
+        await send_func(card_text, parse_mode='html', attachments=[keyboard])
 
     async def _handle_profile(self, event: MessageCreated):
         await self._send_profile(event.message.answer, event.message.sender.user_id)
