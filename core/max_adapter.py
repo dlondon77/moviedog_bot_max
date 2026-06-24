@@ -541,6 +541,16 @@ class MaxAdapter:
 
         self.bot = Bot(token=self.token)
         self.dp = Dispatcher()
+        # Проверка БД
+        try:
+            conn = db_module.get_movies_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM movies")
+            count = cursor.fetchone()[0]
+            conn.close()
+            logger.info(f"✅ Фильмов в БД: {count}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка БД: {e}")
         self.user_context = {}
 
         self._register_handlers()
