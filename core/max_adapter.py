@@ -1126,8 +1126,9 @@ class MaxAdapter:
 
         # ===== ОСНОВНЫЕ КОМАНДЫ =====
         if payload == "random":
+            user_id = event.callback.user.user_id  # <-- явно получаем user_id
             await event.message.answer("🎲 Ищу случайный фильм...")
-            await self._send_random_result(event.message.answer)
+            await self._send_random_result(event.message.answer, user_id)
         elif payload == "search":
             self._get_user_context(user_id)['state'] = 'awaiting_search'
             await event.message.answer("🔍 Введи название фильма:")
