@@ -865,6 +865,19 @@ class MaxAdapter:
             )
             return
 
+        # ===== ПОИСК НА ДРУГИХ ПРОСТОРАХ (заглушка) =====
+        if payload.startswith("search_elsewhere_"):
+            movie_id = int(payload.split("_")[2])
+            await event.message.answer(
+                f"🔍 Ищу фильм ID: {movie_id} в других источниках...\n\n"
+                "Сейчас я могу предложить:\n"
+                f"• <a href='https://www.kinopoisk.ru/film/{movie_id}/'>Кинопоиск</a>\n"
+                "• <a href='https://www.imdb.com/find?q='>IMDb</a> (в разработке)\n\n"
+                "Скоро я смогу загружать фильмы напрямую из API! 🐾",
+                parse_mode="html"
+            )
+            return
+        
         if payload == "feedback_soon":
             await event.message.answer(
                 "📝 <b>Мои обращения</b>\n\n"
