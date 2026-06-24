@@ -1,4 +1,8 @@
-# core/agent.py
+# core/agent.py — С ПОДДЕРЖКОЙ КОНТЕКСТА И ЗАПРЕТОМ ПОВТОРА
+# + Единая история диалога для всех режимов
+# + Передача уже показанных ID для запрета повтора
+# + Запрет на "сохранить в любимые"
+
 import json
 import logging
 import re
@@ -28,7 +32,7 @@ def add_to_history(user_id: int, role: str, content: str):
         CHAT_HISTORY[user_id] = CHAT_HISTORY[user_id][-MAX_HISTORY_LENGTH * 2:]
 
 
-# ==================== СИСТЕМНЫЕ ПРОМПТЫ ====================
+# ==================== СИСТЕМНЫЙ ПРОМПТ ====================
 
 SYSTEM_PROMPT = """Ты — КиноИщейка, собака-девочка, кинокритик с отличным чутьём на хорошее кино! 🐕🎬
 
@@ -36,7 +40,7 @@ SYSTEM_PROMPT = """Ты — КиноИщейка, собака-девочка, �
 НЕ используй маркдаун-разметку (** для жирного, * для курсива).
 НЕ используй длинные линии-разделители (━, —, ─, ===, ***).
 НЕ пиши служебные фразы: "Сначала найду ID", "Отлично! Теперь сравню", "Ого, какие данные".
-НЕ ПРЕДЛАГАЙ СОХРАНЯТЬ ФИЛЬМЫ В ЛЮБИМЫЕ — эта функция доступна через кнопки в карточке фильма!
+НЕ ПРЕДЛАГАЙ СОХРАНЯТЬ ФИЛЬМЫ В ЛЮБИМЫЕ — этой функции пока нет в боте!
 
 КОГДА ДАЁШЬ СПИСОК ФИЛЬМОВ — ВСЕГДА УКАЗЫВАЙ ID В ФОРМАТЕ (ID: число)!
 ID должен быть в конце строки с фильмом, после ссылки.
@@ -62,86 +66,13 @@ CHAT_SYSTEM_PROMPT = """Ты — КиноИщейка, собака-девочк
 Давай интересные факты, шутки, забавные детали о фильмах и актёрах.
 
 НЕ делай подборки и сравнения — это не твоя задача сейчас.
-НЕ предлагай сохранять фильмы в любимые — эта функция доступна через кнопки в карточке фильма!
+НЕ предлагай сохранять фильмы в любимые — этой функции пока нет!
 
 Если пользователь просит найти фильм, подобрать по жанру или сравнить — скажи, что для этого есть специальные команды, и предложи выбрать нужную.
+
+Пример ответа, если запрос похож на стандартную функцию:
+"Ой, я чувствую, что тут пахнет поиском! 🔍 Для поиска фильмов лучше использовать /search, а для поиска по актёрам — /person. Хочешь, я подскажу что-то интересное о кино вместо этого?"
 """
-
-
-# ==================== ОПРЕДЕЛЕНИЕ "ОБЩЕГО" ЗАПРОСА ====================
-
-def is_vague_query(query: str) -> bool:
-    """
-    Определяет, является ли запрос "общим" (требует уточнения)
-    """
-    query_lower = query.lower().strip()
-    
-    # Если запрос слишком короткий (< 5 слов) — считаем общим
-    if len(query_lower.split()) < 5:
-        return True
-    
-    vague_phrases = [
-        'подбери фильм', 'посоветуй фильм', 'какой фильм посмотреть',
-        'что посмотреть', 'хочу фильм', 'нужен фильм', 'подборку фильмов',
-        'фильм на вечер', 'что-нибудь посмотреть', 'какое кино',
-        'посоветуй кино', 'хочу кино', 'нужно кино', 'фильм',
-        'посмотреть фильм', 'выбрать фильм', 'подборка', 'что бы посмотреть'
-    ]
-    
-    for phrase in vague_phrases:
-        if phrase in query_lower:
-            return True
-    
-    has_genre = any(g in query_lower for g in ['комеди', 'драм', 'триллер', 'ужас', 'фантастик', 'боевик', 'мелодрам', 'вестерн', 'мюзикл'])
-    has_actor = any(a in query_lower for a in ['актёр', 'режиссёр', 'с участием', 'в ролях', 'исполнил'])
-    has_year = any(y in query_lower for y in ['год', '20', '19', 'новинк', 'старый', 'современн'])
-    has_mood = any(m in query_lower for m in ['весёл', 'грустн', 'напряжён', 'романтичн', 'страшн', 'смешн', 'душевн', 'лёгк'])
-    has_specific = any(s in query_lower for s in ['про ', 'о ', 'где ', 'когда ', 'кто '])
-    
-    if has_genre or has_actor or has_year or has_mood or has_specific:
-        return False
-    
-    return True
-
-
-def generate_clarifying_questions(query: str) -> str:
-    """
-    Генерирует уточняющие вопросы на основе общего запроса
-    """
-    query_lower = query.lower()
-    
-    questions = [
-        "🎭 <b>Какой жанр тебе интересен?</b>\n"
-        "   • Комедия • Драма • Триллер • Фантастика • Ужасы • Боевик • Мелодрама"
-    ]
-    
-    questions.append(
-        "\n📅 <b>Какая эпоха?</b>\n"
-        "   • Современное (2000+) • 90-е • 80-е • Классика (до 80-х) • Не важно"
-    )
-    
-    questions.append(
-        "\n🎬 <b>Какое настроение?</b>\n"
-        "   • Весёлое • Грустное • Напряжённое • Романтичное • Страшное • Вдохновляющее"
-    )
-    
-    if any(w in query_lower for w in ['актёр', 'режиссёр', 'с участием']):
-        questions.append(
-            "\n🐾 <b>Кого из актёров или режиссёров ты любишь?</b>\n"
-            "   • Например: Ди Каприо, Нолан, Джим Керри, Тарантино..."
-        )
-    
-    if any(w in query_lower for w in ['как', 'похож', 'наподобие', 'вроде']):
-        questions.append(
-            "\n💡 <b>Какой фильм тебе понравился?</b>\n"
-            "   • Напиши название, и я найду похожее!"
-        )
-    
-    questions.append(
-        "\n📝 <b>Или просто напиши подробнее, что хочешь увидеть!</b>"
-    )
-    
-    return "\n\n".join(questions)
 
 
 # ==================== РЕЖИМНЫЕ ПРОМПТЫ ====================
@@ -171,7 +102,7 @@ def get_recommend_prompt(query: str, exclude_ids: List[int] = None, context: str
 
 ОБЯЗАТЕЛЬНО указывай ID каждого фильма в формате (ID: число) в конце строки!
 НЕ используй длинные линии-разделители.
-НЕ предлагай сохранять фильмы в любимые — эта функция доступна через кнопки в карточке фильма!
+НЕ предлагай сохранять фильмы в любимые — этой функции пока нет!
 Форматируй ответ красиво, с эмодзи и переносами строк.
 """
 
@@ -201,7 +132,7 @@ def get_actor_prompt(query: str, exclude_ids: List[int] = None, context: str = N
 
 ОБЯЗАТЕЛЬНО указывай ID каждого фильма в формате (ID: число) в конце строки!
 НЕ используй длинные линии-разделители.
-НЕ предлагай сохранять фильмы в любимые — эта функция доступна через кнопки в карточке фильма!
+НЕ предлагай сохранять фильмы в любимые — этой функции пока нет!
 Форматируй ответ красиво, с эмодзи и переносами строк.
 """
 
@@ -229,7 +160,7 @@ def get_plot_prompt(query: str, exclude_ids: List[int] = None, context: str = No
 
 ОБЯЗАТЕЛЬНО указывай ID каждого фильма в формате (ID: число) в конце строки!
 НЕ используй длинные линии-разделители.
-НЕ предлагай сохранять фильмы в любимые — эта функция доступна через кнопки в карточке фильма!
+НЕ предлагай сохранять фильмы в любимые — этой функции пока нет!
 Форматируй ответ красиво, с эмодзи и переносами строк.
 """
 
@@ -252,7 +183,7 @@ def get_compare_prompt(query: str, exclude_ids: List[int] = None, context: str =
 Важно:
 - НЕ пиши "Сначала найду ID", "Отлично! Теперь сравню", "Ого, какие данные"
 - НЕ используй линии-разделители
-- НЕ предлагай сохранять фильмы в любимые — эта функция доступна через кнопки в карточке фильма!
+- НЕ предлагай сохранять фильмы в любимые — этой функции пока нет!
 - Сразу переходи к сравнению
 - Укажи ID фильмов в формате (ID: число) в конце строки!
 - В конце добавь рекомендацию
@@ -262,7 +193,7 @@ def get_compare_prompt(query: str, exclude_ids: List[int] = None, context: str =
 
 
 def get_chat_prompt(query: str) -> str:
-    return f"Ответь коротко (2-3 предложения) и интересно. НЕ предлагай сохранять фильмы в любимые — эта функция доступна через кнопки в карточке фильма: {query}"
+    return f"Ответь коротко (2-3 предложения) и интересно. НЕ предлагай сохранять фильмы в любимые — этой функции пока нет: {query}"
 
 
 # ==================== ФОРМАТИРОВАНИЕ ОТВЕТА ====================
@@ -272,16 +203,25 @@ def format_response(response: str) -> str:
     if not response:
         return response
     
+    # Убираем множественные переносы
     response = re.sub(r'\n{3,}', '\n\n', response)
+    
+    # Скрываем ID в HTML-комментарии, но не удаляем
     response = re.sub(r'\(ID:\s*(\d+)\)', r'<!--ID:\1-->', response)
+    
+    # Убираем служебные фразы для сравнения
     response = re.sub(r'Сначала найду ID[^.]*\.', '', response)
     response = re.sub(r'Отлично! Теперь сравню[^.]*\.', '', response)
     response = re.sub(r'Ого, какие данные[^.]*\.', '', response)
+    
+    # Убираем длинные линии
     response = re.sub(r'━{3,}', '', response)
     response = re.sub(r'—{3,}', '', response)
     response = re.sub(r'─{3,}', '', response)
     response = re.sub(r'_{3,}', '', response)
     response = re.sub(r'\*{3,}', '', response)
+    
+    # Чистим лишние переносы после удаления
     response = re.sub(r'\n{3,}', '\n\n', response)
     
     return response.strip()
@@ -291,24 +231,29 @@ def extract_movie_ids(text: str) -> List[int]:
     """Извлекает ID фильмов из ответа агента — приоритет у ссылок"""
     ids = []
     
+    # ПАТТЕРН 1: ссылка на Кинопоиск (САМЫЙ НАДЁЖНЫЙ!)
     pattern_link = r'https?://www\.kinopoisk\.ru/(?:film|series)/(\d+)/'
     link_matches = re.findall(pattern_link, text)
     for m in link_matches:
         ids.append(int(m))
     
+    # Если нашли ID в ссылках — возвращаем их (они самые надёжные)
     if ids:
         return list(set(ids))
     
+    # ПАТТЕРН 2: скрытые ID в HTML-комментариях <!--ID:123-->
     pattern_comment = r'<!--ID:(\d+)-->'
     matches = re.findall(pattern_comment, text)
     for m in matches:
         ids.append(int(m))
     
+    # ПАТТЕРН 3: (ID: 123) — если остались
     pattern = r'\(ID:\s*(\d+)\)'
     matches = re.findall(pattern, text)
     for m in matches:
         ids.append(int(m))
     
+    # ПАТТЕРН 4: просто число в скобках (4-7 цифр, не год)
     pattern3 = r'\((\d{4,7})\)'
     matches3 = re.findall(pattern3, text)
     for m in matches3:
@@ -684,11 +629,11 @@ def _compare_movies(movie_id1: int, movie_id2: int) -> Dict:
 
 
 def _get_user_favorites(user_id: int) -> List[Dict]:
-    return user_module.get_favorite_movies(user_id, limit=10)
+    return movie_module.get_favorite_movies(user_id, limit=10)
 
 
 def _get_recommendations_by_preferences(user_id: int) -> List[Dict]:
-    favorites = user_module.get_favorite_movies(user_id, limit=5)
+    favorites = movie_module.get_favorite_movies(user_id, limit=5)
     if not favorites:
         return []
     genres = {}
@@ -714,7 +659,7 @@ def _get_recommendations_by_preferences(user_id: int) -> List[Dict]:
 
 def _save_to_favorites(user_id: int, movie_id: int, movie_name: str) -> bool:
     try:
-        return user_module.add_favorite_movie(user_id, movie_id)
+        return movie_module.add_favorite_movie(user_id, movie_id)
     except Exception as e:
         logger.error(f"Ошибка сохранения в любимые: {e}")
         return False
@@ -758,7 +703,7 @@ async def execute_tool(func_name: str, func_args: dict, user_id: int = None) -> 
         return {"error": str(e)}
 
 
-# ==================== ОЧИСТКА ====================
+# ==================== ОЧИСТКА И ИЗВЛЕЧЕНИЕ ID ====================
 
 def _clean_markdown(text: str) -> str:
     """Удаляет маркдаун-разметку, сохраняя структуру"""
@@ -778,12 +723,13 @@ def _build_context_from_history(user_id: int, max_messages: int = 4) -> str:
     if not history:
         return ""
     
+    # Берём последние max_messages сообщений (пользователь + ассистент)
     recent = history[-max_messages:] if len(history) > max_messages else history
     
     context_lines = []
     for msg in recent:
         role = "Пользователь" if msg["role"] == "user" else "КиноИщейка"
-        context_lines.append(f"{role}: {msg['content'][:200]}...")
+        context_lines.append(f"{role}: {msg['content'][:200]}...")  # Обрезаем для краткости
     
     return "\n".join(context_lines)
 
@@ -797,8 +743,7 @@ async def run_agent(
     agent_mode: str = 'chat', 
     chat_mode: bool = False,
     exclude_ids: List[int] = None,
-    use_context: bool = True,
-    preferences: Dict = None
+    use_context: bool = True
 ) -> str:
     """
     Запускает агента с учётом режима.
@@ -813,23 +758,11 @@ async def run_agent(
     Параметры:
     - exclude_ids: ID фильмов, которые уже показывали (запрет повтора)
     - use_context: использовать ли историю диалога
-    - preferences: предпочтения пользователя
     """
-    # Проверка на "общий" запрос (для режимов recommend и plot_search)
-    if agent_mode in ['recommend', 'plot_search'] and not chat_mode:
-        if is_vague_query(user_query):
-            clarifying_questions = generate_clarifying_questions(user_query)
-            return f"🐾 Ого, ты хочешь подборку! Чтобы я нашла идеальные варианты, давай уточним:\n\n{clarifying_questions}\n\n🐾 Напиши свои предпочтения, и я подберу идеальные фильмы!"
-    
     # Строим контекст из истории
     context_text = ""
     if use_context:
         context_text = _build_context_from_history(user_id, max_messages=4)
-    
-    # Форматируем предпочтения в текст
-    prefs_text = ""
-    if preferences:
-        prefs_text = user_module.format_preferences_text(preferences)
     
     # Выбираем системный промпт
     if agent_mode == 'chat' or chat_mode:
@@ -849,11 +782,8 @@ async def run_agent(
     elif agent_mode == 'chat' or chat_mode:
         final_query = get_chat_prompt(user_query)
     else:
+        # fallback — используем user_query как есть
         final_query = user_query
-    
-    # Добавляем предпочтения в запрос (кроме режима chat)
-    if prefs_text and agent_mode not in ['chat']:
-        final_query = final_query + prefs_text
     
     messages = [
         {"role": "system", "content": system_prompt}
@@ -905,8 +835,10 @@ async def run_agent(
             raw_response = message.content
             clean_response = _clean_markdown(raw_response)
             
+            # Форматируем ответ (скрываем ID в комментарии)
             formatted_response = format_response(clean_response)
             
+            # Сохраняем историю (для всех режимов)
             add_to_history(user_id, "user", user_query)
             add_to_history(user_id, "assistant", formatted_response)
             
