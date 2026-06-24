@@ -1572,6 +1572,7 @@ class MaxAdapter:
 
         # ===== РЕЖИМ "ПООБЩАТЬСЯ" =====
         if agent_mode == 'chat':
+            # Проверяем, не хочет ли пользователь найти фильм
             if _is_search_intent(query):
                 buttons = [
                     [{"type": "callback", "text": "🔍 Поиск по названию", "payload": "search"}],
@@ -1587,6 +1588,35 @@ class MaxAdapter:
                     attachments=[keyboard]
                 )
                 return
+            
+            # Проверяем, не хочет ли пользователь подборку
+            if any(kw in query.lower() for kw in ['подбери', 'посоветуй', 'рекомендуй', 'какой фильм', 'что посмотреть']):
+                buttons = [
+                    [{"type": "callback", "text": "🎬 Подобрать фильм", "payload": "agent_recommend"}],
+                    [{"type": "callback", "text": "🐾 Актёрский нюх", "payload": "agent_actor"}],
+                    [{"type": "callback", "text": "🔎 По сюжету", "payload": "agent_plot_search"}],
+                    [{"type": "callback", "text": "⭐ Сравнить фильмы", "payload": "agent_compare"}]
+                ]
+                keyboard = InlineKeyboardMarkup(buttons)
+                await event.message.answer(
+                    "🐾 Ой, я чувствую, что тут пахнет подборкой! 🎬\n\n"
+                    "Для этого у меня есть специальные режимы в КиноЛогово.\n"
+                    "Выбери, что нужно:",
+                    attachments=[keyboard]
+                )
+                return
+            
+            # Обычный режим — короткий ответ
+            thinking_msg = await event.message.answer("💬 Дай-ка подумаю... 🐾")
+            
+            async def delete_after_delay():
+                await asyncio.sleep(2)
+                try:
+                    await thinking_msg.delete()
+                except Exception:
+                    pass
+            
+            asyncio.create_task(delete_after_delay())
             
             try:
                 response = await run_agent(query, user_id, ai_client, agent_mode='chat', chat_mode=True)
