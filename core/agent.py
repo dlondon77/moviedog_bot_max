@@ -1,7 +1,8 @@
 # core/agent.py — ОПТИМИЗИРОВАННАЯ ВЕРСИЯ
 # Вся ИИ-логика вынесена сюда. max_adapter.py только вызывает run_agent()
 # + Режимные промпты (recommend, actor, plot_search, compare, chat)
-# + format_response() — чистка ответов
+# + format_response() — скрывает ID в HTML-комментарии
+# + extract_movie_ids() — извлекает ID из скрытых комментариев
 # + Мнение о фильме НЕ ЗДЕСЬ (остаётся в max_adapter.py)
 
 import json
@@ -37,11 +38,11 @@ SYSTEM_PROMPT = """Ты — КиноИщейка, собака-девочка, �
 НЕ пиши служебные фразы: "Сначала найду ID", "Отлично! Теперь сравню", "Ого, какие данные".
 
 КОГДА ДАЁШЬ СПИСОК ФИЛЬМОВ — ВСЕГДА УКАЗЫВАЙ ID В ФОРМАТЕ (ID: число)!
+ID должен быть в конце строки с фильмом, после ссылки.
 ЭТО ОБЯЗАТЕЛЬНО для работы кнопки "Показать карточки"!
-ID нужны в ответе, но они будут скрыты от пользователя позже.
 
 Формат ссылки на фильм:
-<a href='https://www.kinopoisk.ru/film/[ID]/'>Название фильма</a> (Год) ⭐ Рейтинг
+<a href='https://www.kinopoisk.ru/film/[ID]/'>Название фильма</a> (Год) ⭐ Рейтинг (ID: число)
 
 Пример правильного ответа:
 🎬 <a href='https://www.kinopoisk.ru/film/447301/'>Начало</a> (2010) ⭐ 8.6 (ID: 447301)
@@ -80,7 +81,7 @@ def get_recommend_prompt(query: str) -> str:
 3. Учти жанр, настроение, стиль, если пользователь указал
 4. В конце дай совет, с какого фильма начать
 
-ОБЯЗАТЕЛЬНО указывай ID каждого фильма в формате (ID: число).
+ОБЯЗАТЕЛЬНО указывай ID каждого фильма в формате (ID: число) в конце строки!
 НЕ используй длинные линии-разделители.
 Форматируй ответ красиво, с эмодзи и переносами строк.
 """
@@ -97,7 +98,7 @@ def get_actor_prompt(query: str) -> str:
 3. Учти период и жанр, если указаны
 4. В конце дай рекомендацию
 
-ОБЯЗАТЕЛЬНО указывай ID каждого фильма в формате (ID: число).
+ОБЯЗАТЕЛЬНО указывай ID каждого фильма в формате (ID: число) в конце строки!
 НЕ используй длинные линии-разделители.
 Форматируй ответ красиво, с эмодзи и переносами строк.
 """
@@ -112,7 +113,7 @@ def get_plot_prompt(query: str) -> str:
 Для каждого: название (год), рейтинг, краткое объяснение, почему он подходит.
 В конце посоветуй, с какого начать.
 
-ОБЯЗАТЕЛЬНО указывай ID каждого фильма в формате (ID: число).
+ОБЯЗАТЕЛЬНО указывай ID каждого фильма в формате (ID: число) в конце строки!
 НЕ используй длинные линии-разделители.
 Форматируй ответ красиво, с эмодзи и переносами строк.
 """
@@ -125,7 +126,7 @@ def get_compare_prompt(query: str) -> str:
 - НЕ пиши "Сначала найду ID", "Отлично! Теперь сравню", "Ого, какие данные"
 - НЕ используй линии-разделители
 - Сразу переходи к сравнению
-- Укажи ID фильмов в формате (ID: число)
+- Укажи ID фильмов в формате (ID: число) в конце строки!
 - В конце добавь рекомендацию
 
 Сравни: рейтинги, жанры, режиссёров, актёров, какой лучше и почему.
@@ -138,21 +139,15 @@ def get_chat_prompt(query: str) -> str:
 # ==================== ФОРМАТИРОВАНИЕ ОТВЕТА ====================
 
 def format_response(response: str) -> str:
-    """Форматирует ответ агента — убирает ID, линии и служебные фразы"""
+    """Форматирует ответ агента — скрывает ID, но оставляет их в скрытом виде"""
     if not response:
         return response
     
     # Убираем множественные переносы
     response = re.sub(r'\n{3,}', '\n\n', response)
     
-    # Убираем ID из текста
-    response = re.sub(r'\s*\(ID:\s*\d+\)', '', response)
-    response = re.sub(r'\s*ID:\s*\d+', '', response)
-    response = re.sub(r'\(ID:\d+\)', '', response)
-    
-    # Убираем дублирующиеся эмодзи
-    response = re.sub(r'🎬\s*🎬', '🎬', response)
-    response = re.sub(r'⭐\s*⭐', '⭐', response)
+    # Скрываем ID в HTML-комментарии, но не удаляем
+    response = re.sub(r'\(ID:\s*(\d+)\)', r'<!--ID:\1-->', response)
     
     # Убираем служебные фразы для сравнения
     response = re.sub(r'Сначала найду ID[^.]*\.', '', response)
@@ -170,6 +165,38 @@ def format_response(response: str) -> str:
     response = re.sub(r'\n{3,}', '\n\n', response)
     
     return response.strip()
+
+
+def extract_movie_ids(text: str) -> List[int]:
+    """Извлекает ID фильмов из ответа агента"""
+    ids = []
+    
+    # Паттерн 1: скрытые ID в HTML-комментариях <!--ID:123-->
+    pattern_comment = r'<!--ID:(\d+)-->'
+    matches = re.findall(pattern_comment, text)
+    for m in matches:
+        ids.append(int(m))
+    
+    # Паттерн 2: (ID: 123) — если остались
+    pattern = r'\(ID:\s*(\d+)\)'
+    matches = re.findall(pattern, text)
+    for m in matches:
+        ids.append(int(m))
+    
+    # Паттерн 3: ссылка на Кинопоиск
+    pattern2 = r'https?://www\.kinopoisk\.ru/film/(\d+)/'
+    url_matches = re.findall(pattern2, text)
+    for m in url_matches:
+        ids.append(int(m))
+    
+    # Паттерн 4: просто число в скобках (4-7 цифр, не год)
+    pattern3 = r'\((\d{4,7})\)'
+    matches3 = re.findall(pattern3, text)
+    for m in matches3:
+        if len(m) >= 4 and int(m) > 1900:
+            ids.append(int(m))
+    
+    return list(set(ids))  # удаляем дубликаты
 
 
 # ==================== ИНСТРУМЕНТЫ ====================
@@ -626,32 +653,6 @@ def _clean_markdown(text: str) -> str:
     return text
 
 
-def extract_movie_ids(text: str) -> List[int]:
-    """Извлекает ID фильмов из ответа агента"""
-    ids = []
-    
-    # Паттерн 1: (ID: 123)
-    pattern = r'\(ID:\s*(\d+)\)'
-    matches = re.findall(pattern, text)
-    for m in matches:
-        ids.append(int(m))
-    
-    # Паттерн 2: ссылка на Кинопоиск
-    pattern2 = r'https?://www\.kinopoisk\.ru/film/(\d+)/'
-    url_matches = re.findall(pattern2, text)
-    for m in url_matches:
-        ids.append(int(m))
-    
-    # Паттерн 3: просто число в скобках, похожее на ID (4-7 цифр, не год)
-    pattern3 = r'\((\d{4,7})\)'
-    matches3 = re.findall(pattern3, text)
-    for m in matches3:
-        if len(m) >= 4 and int(m) > 1900:
-            ids.append(int(m))
-    
-    return list(set(ids))  # удаляем дубликаты
-
-
 # ==================== ГЛАВНЫЙ ЦИКЛ ====================
 
 async def run_agent(
@@ -741,7 +742,7 @@ async def run_agent(
             raw_response = message.content
             clean_response = _clean_markdown(raw_response)
             
-            # Форматируем ответ (убираем ID и линии)
+            # Форматируем ответ (скрываем ID в комментарии)
             formatted_response = format_response(clean_response)
             
             # Сохраняем историю
