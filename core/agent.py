@@ -1,10 +1,7 @@
-# core/agent.py — ОПТИМИЗИРОВАННАЯ ВЕРСИЯ
-# Вся ИИ-логика вынесена сюда. max_adapter.py только вызывает run_agent()
-# + Режимные промпты (recommend, actor, plot_search, compare, chat)
-# + format_response() — скрывает ID в HTML-комментарии
-# + extract_movie_ids() — извлекает ID из скрытых комментариев
-# + ЗАПРЕЩЕНО предлагать "сохранить в любимые"
-# + Мнение о фильме НЕ ЗДЕСЬ (остаётся в max_adapter.py)
+# core/agent.py — С ПОДДЕРЖКОЙ КОНТЕКСТА И ЗАПРЕТОМ ПОВТОРА
+# + Единая история диалога для всех режимов
+# + Передача уже показанных ID для запрета повтора
+# + Запрет на "сохранить в любимые"
 
 import json
 import logging
@@ -27,6 +24,12 @@ def clear_chat_history(user_id: int):
 
 def get_chat_history(user_id: int) -> list:
     return CHAT_HISTORY.get(user_id, [])
+
+def add_to_history(user_id: int, role: str, content: str):
+    """Добавляет сообщение в историю диалога"""
+    CHAT_HISTORY.setdefault(user_id, []).append({"role": role, "content": content})
+    if len(CHAT_HISTORY[user_id]) > MAX_HISTORY_LENGTH * 2:
+        CHAT_HISTORY[user_id] = CHAT_HISTORY[user_id][-MAX_HISTORY_LENGTH * 2:]
 
 
 # ==================== СИСТЕМНЫЙ ПРОМПТ ====================
@@ -74,11 +77,22 @@ CHAT_SYSTEM_PROMPT = """Ты — КиноИщейка, собака-девочк
 
 # ==================== РЕЖИМНЫЕ ПРОМПТЫ ====================
 
-def get_recommend_prompt(query: str) -> str:
+def get_recommend_prompt(query: str, exclude_ids: List[int] = None, context: str = None) -> str:
+    """Формирует промпт для режима 'Подобрать фильм'"""
+    exclude_text = ""
+    if exclude_ids:
+        exclude_text = f"\n\n🚫 НЕ ПРЕДЛАГАЙ фильмы с этими ID: {exclude_ids}\nЭти фильмы уже показывали пользователю. Предложи новые, другие варианты!"
+    
+    context_text = ""
+    if context:
+        context_text = f"\n\n📝 Контекст предыдущего диалога:\n{context}\n\nУчитывай, что мы уже обсуждали, и не повторяйся."
+    
     return f"""
 Ты — КиноИщейка, собака-девочка, кинокритик. 🐕
 
 Пользователь просит подборку фильмов: {query}
+{context_text}
+{exclude_text}
 
 Твоя задача:
 1. Найди от 3 до 5 фильмов, которые идеально подходят под запрос
@@ -93,11 +107,22 @@ def get_recommend_prompt(query: str) -> str:
 """
 
 
-def get_actor_prompt(query: str) -> str:
+def get_actor_prompt(query: str, exclude_ids: List[int] = None, context: str = None) -> str:
+    """Формирует промпт для режима 'Актёрский нюх'"""
+    exclude_text = ""
+    if exclude_ids:
+        exclude_text = f"\n\n🚫 НЕ ПРЕДЛАГАЙ фильмы с этими ID: {exclude_ids}\nЭти фильмы уже показывали пользователю. Предложи новые, другие варианты!"
+    
+    context_text = ""
+    if context:
+        context_text = f"\n\n📝 Контекст предыдущего диалога:\n{context}\n\nУчитывай, что мы уже обсуждали, и не повторяйся."
+    
     return f"""
 Ты — КиноИщейка, кинокритик с отличным нюхом на таланты. 🐕
 
 Пользователь спрашивает о персоне: {query}
+{context_text}
+{exclude_text}
 
 Найди в базе этого актёра или режиссёра и сделай разбор:
 1. Лучшие роли/работы (с рейтингом и кратким объяснением)
@@ -112,11 +137,22 @@ def get_actor_prompt(query: str) -> str:
 """
 
 
-def get_plot_prompt(query: str) -> str:
+def get_plot_prompt(query: str, exclude_ids: List[int] = None, context: str = None) -> str:
+    """Формирует промпт для режима 'По сюжету'"""
+    exclude_text = ""
+    if exclude_ids:
+        exclude_text = f"\n\n🚫 НЕ ПРЕДЛАГАЙ фильмы с этими ID: {exclude_ids}\nЭти фильмы уже показывали пользователю. Предложи новые, другие варианты!"
+    
+    context_text = ""
+    if context:
+        context_text = f"\n\n📝 Контекст предыдущего диалога:\n{context}\n\nУчитывай, что мы уже обсуждали, и не повторяйся."
+    
     return f"""
 Ты — КиноИщейка, собака-девочка с отличным нюхом на сюжеты. 🐕
 
 Пользователь описал, что хочет посмотреть: {query}
+{context_text}
+{exclude_text}
 
 Найди 3 фильма, которые лучше всего подходят под это описание.
 Для каждого: название (год), рейтинг, краткое объяснение, почему он подходит.
@@ -129,9 +165,20 @@ def get_plot_prompt(query: str) -> str:
 """
 
 
-def get_compare_prompt(query: str) -> str:
+def get_compare_prompt(query: str, exclude_ids: List[int] = None, context: str = None) -> str:
+    """Формирует промпт для режима 'Сравнить фильмы'"""
+    exclude_text = ""
+    if exclude_ids:
+        exclude_text = f"\n\n🚫 НЕ ПРЕДЛАГАЙ фильмы с этими ID: {exclude_ids}\nЭти фильмы уже показывали пользователю. Предложи новые, другие варианты!"
+    
+    context_text = ""
+    if context:
+        context_text = f"\n\n📝 Контекст предыдущего диалога:\n{context}\n\nУчитывай, что мы уже обсуждали, и не повторяйся."
+    
     return f"""
 Ты — КиноИщейка. Сравни фильмы: {query}
+{context_text}
+{exclude_text}
 
 Важно:
 - НЕ пиши "Сначала найду ID", "Отлично! Теперь сравню", "Ого, какие данные"
@@ -185,7 +232,7 @@ def extract_movie_ids(text: str) -> List[int]:
     ids = []
     
     # ПАТТЕРН 1: ссылка на Кинопоиск (САМЫЙ НАДЁЖНЫЙ!)
-    pattern_link = r'https?://www\.kinopoisk\.ru/film/(\d+)/'
+    pattern_link = r'https?://www\.kinopoisk\.ru/(?:film|series)/(\d+)/'
     link_matches = re.findall(pattern_link, text)
     for m in link_matches:
         ids.append(int(m))
@@ -670,6 +717,23 @@ def _clean_markdown(text: str) -> str:
     return text
 
 
+def _build_context_from_history(user_id: int, max_messages: int = 4) -> str:
+    """Строит контекст из истории диалога для передачи в промпт"""
+    history = CHAT_HISTORY.get(user_id, [])
+    if not history:
+        return ""
+    
+    # Берём последние max_messages сообщений (пользователь + ассистент)
+    recent = history[-max_messages:] if len(history) > max_messages else history
+    
+    context_lines = []
+    for msg in recent:
+        role = "Пользователь" if msg["role"] == "user" else "КиноИщейка"
+        context_lines.append(f"{role}: {msg['content'][:200]}...")  # Обрезаем для краткости
+    
+    return "\n".join(context_lines)
+
+
 # ==================== ГЛАВНЫЙ ЦИКЛ ====================
 
 async def run_agent(
@@ -677,7 +741,9 @@ async def run_agent(
     user_id: int, 
     ai_client, 
     agent_mode: str = 'chat', 
-    chat_mode: bool = False
+    chat_mode: bool = False,
+    exclude_ids: List[int] = None,
+    use_context: bool = True
 ) -> str:
     """
     Запускает агента с учётом режима.
@@ -688,8 +754,15 @@ async def run_agent(
     - plot_search: поиск по сюжету
     - compare: сравнение фильмов
     - chat: свободный диалог (короткие ответы)
+    
+    Параметры:
+    - exclude_ids: ID фильмов, которые уже показывали (запрет повтора)
+    - use_context: использовать ли историю диалога
     """
-    history = CHAT_HISTORY.get(user_id, [])
+    # Строим контекст из истории
+    context_text = ""
+    if use_context:
+        context_text = _build_context_from_history(user_id, max_messages=4)
     
     # Выбираем системный промпт
     if agent_mode == 'chat' or chat_mode:
@@ -699,13 +772,13 @@ async def run_agent(
     
     # Выбираем промпт в зависимости от режима
     if agent_mode == 'recommend':
-        final_query = get_recommend_prompt(user_query)
+        final_query = get_recommend_prompt(user_query, exclude_ids, context_text)
     elif agent_mode == 'actor':
-        final_query = get_actor_prompt(user_query)
+        final_query = get_actor_prompt(user_query, exclude_ids, context_text)
     elif agent_mode == 'plot_search':
-        final_query = get_plot_prompt(user_query)
+        final_query = get_plot_prompt(user_query, exclude_ids, context_text)
     elif agent_mode == 'compare':
-        final_query = get_compare_prompt(user_query)
+        final_query = get_compare_prompt(user_query, exclude_ids, context_text)
     elif agent_mode == 'chat' or chat_mode:
         final_query = get_chat_prompt(user_query)
     else:
@@ -716,8 +789,11 @@ async def run_agent(
         {"role": "system", "content": system_prompt}
     ]
     
-    if history:
-        messages.extend(history[-MAX_HISTORY_LENGTH:])
+    # Добавляем историю (кроме режима chat, там своя логика)
+    if agent_mode != 'chat' and not chat_mode:
+        history = CHAT_HISTORY.get(user_id, [])
+        if history:
+            messages.extend(history[-MAX_HISTORY_LENGTH:])
     
     messages.append({"role": "user", "content": final_query})
     
@@ -762,12 +838,9 @@ async def run_agent(
             # Форматируем ответ (скрываем ID в комментарии)
             formatted_response = format_response(clean_response)
             
-            # Сохраняем историю
-            CHAT_HISTORY.setdefault(user_id, []).append({"role": "user", "content": user_query})
-            CHAT_HISTORY[user_id].append({"role": "assistant", "content": formatted_response})
-            
-            if len(CHAT_HISTORY[user_id]) > MAX_HISTORY_LENGTH * 2:
-                CHAT_HISTORY[user_id] = CHAT_HISTORY[user_id][-MAX_HISTORY_LENGTH * 2:]
+            # Сохраняем историю (для всех режимов)
+            add_to_history(user_id, "user", user_query)
+            add_to_history(user_id, "assistant", formatted_response)
             
             return formatted_response
     
