@@ -1,9 +1,9 @@
-# core/max_adapter.py - С ПОДДЕРЖКОЙ КОНТЕКСТА И ЗАПРЕТОМ ПОВТОРА
-# + Сохранение ID показанных фильмов для запрета повтора
-# + Передача контекста в run_agent()
-# + Сброс контекста при новой подборке
-# + Карточки-заглушки для отсутствующих фильмов
-# + Улучшенный режим "Пообщаться" с кнопками
+# core/max_adapter.py - ФИНАЛЬНАЯ ВЕРСИЯ
+# + Все функции бота
+# + Кинопрофиль, списки, секретный просмотр
+# + Умные уточняющие вопросы
+# + Кнопки действий в карточках
+# + Поддержка контекста и запрет повтора
 
 import logging
 import configparser
@@ -37,14 +37,26 @@ logger.info(f"👑 Администраторы: {ADMIN_IDS}")
 import user as user_module
 import movie as movie_module
 import db as db_module
-from core.agent import run_agent, clear_chat_history, extract_movie_ids, add_to_history
+from core.agent import run_agent, clear_chat_history, extract_movie_ids, add_to_history, is_vague_query
 
-register_user = user_module.register_user
-get_user_limits = user_module.get_user_limits
-get_user_stats = user_module.get_user_stats
-increment_stat_counter = user_module.increment_stat_counter
-record_user_opinion = user_module.record_user_opinion
+# Импорты из user
+from core.user import (
+    get_user_limits, get_user_stats, increment_stat_counter,
+    register_user, record_user_opinion,
+    add_favorite_movie, remove_favorite_movie, is_favorite,
+    add_to_watchlist, remove_from_watchlist, is_in_watchlist,
+    add_disliked_movie, remove_disliked_movie, is_disliked,
+    get_favorite_movies, get_favorite_movies_count,
+    get_watchlist, get_watchlist_count,
+    get_disliked_movies, get_disliked_count,
+    get_user_preferences,
+    update_cinema_profile_from_movie,
+    update_cinema_profile_from_query,
+    format_profile_for_display,
+    generate_cinema_personality
+)
 
+# Импорты из movie
 get_random_movie_from_db = movie_module.get_random_movie_from_db
 get_movie_details = movie_module.get_movie_details
 format_movie_card = movie_module.format_movie_card
@@ -319,7 +331,7 @@ def get_filter_keyboard(query, filters, total_count, has_more):
 
 
 def get_month_year_keyboard():
-    """Клавиатура для выбора месяца и года (премьеры) - 12 месяцев, начиная с 3 месяцев назад"""
+    """Клавиатура для выбора месяца и года (премьеры)"""
     current_date = datetime.now()
     current_year = current_date.year
     current_month = current_date.month
@@ -358,7 +370,7 @@ def get_month_year_keyboard():
 
 
 def _format_opinion_with_buttons(opinion, movie_name, movie_year, movie_id, source, user_id, is_premium):
-    """Форматирует мнение с кнопками прямо в одном сообщении"""
+    """Форматирует мнение с кнопками"""
     kp_url = f"https://www.kinopoisk.ru/film/{movie_id}/"
     title_with_link = f"<a href='{kp_url}'><b>{movie_name}</b></a> ({movie_year})"
     
@@ -434,13 +446,11 @@ def _extract_movie_name_from_response(response: str, movie_id: int) -> str:
     if not response:
         return None
     
-    # Ищем ссылку с этим ID и извлекаем текст между <a> и </a>
     pattern = rf'<a\s+href=[\'"]?https?://www\.kinopoisk\.ru/(?:film|series)/{movie_id}/[\'"]?>(.*?)</a>'
     match = re.search(pattern, response, re.IGNORECASE)
     if match:
         return match.group(1).strip()
     
-    # Если не нашли — ищем (ID: число) с названием рядом
     pattern2 = rf'([^\(]+?)\s*\(ID:\s*{movie_id}\)'
     match2 = re.search(pattern2, response, re.IGNORECASE)
     if match2:
@@ -477,6 +487,54 @@ def _prepare_movies_with_placeholders(movie_ids: List[int], response: str = "") 
     return movies_list
 
 
+def get_movie_action_buttons(movie_id: int, user_id: int) -> InlineKeyboardMarkup:
+    """Кнопки действий с фильмом (любимые, буду смотреть, не понравилось, секретный просмотр)"""
+    buttons = []
+    
+    is_fav = is_favorite(user_id, movie_id)
+    is_watch = is_in_watchlist(user_id, movie_id)
+    is_bad = is_disliked(user_id, movie_id)
+    
+    kp_cx_url = f"https://www.kinopoisk.cx/film/{movie_id}/"
+    
+    # 1. Секретный просмотр — открывает ссылку
+    buttons.append([
+        {"type": "open_link", "text": "🕵️ Секретный просмотр", "link": kp_cx_url}
+    ])
+    
+    # 2. Любимые
+    if is_fav:
+        buttons.append([
+            {"type": "callback", "text": "❤️ В любимых", "payload": f"remove_fav_{movie_id}"}
+        ])
+    else:
+        buttons.append([
+            {"type": "callback", "text": "❤️ В любимые", "payload": f"add_fav_{movie_id}"}
+        ])
+    
+    # 3. Буду смотреть
+    if is_watch:
+        buttons.append([
+            {"type": "callback", "text": "📌 В списке", "payload": f"remove_watch_{movie_id}"}
+        ])
+    else:
+        buttons.append([
+            {"type": "callback", "text": "📌 Буду смотреть", "payload": f"add_watch_{movie_id}"}
+        ])
+    
+    # 4. Не понравилось
+    if is_bad:
+        buttons.append([
+            {"type": "callback", "text": "👎 Не нравится", "payload": f"remove_disliked_{movie_id}"}
+        ])
+    else:
+        buttons.append([
+            {"type": "callback", "text": "👎 Не понравилось", "payload": f"add_disliked_{movie_id}"}
+        ])
+    
+    return InlineKeyboardMarkup(buttons)
+
+
 # ==================== ОСНОВНОЙ КЛАСС АДАПТЕРА ====================
 class MaxAdapter:
     def __init__(self):
@@ -490,7 +548,7 @@ class MaxAdapter:
         self.user_context = {}
 
         self._register_handlers()
-        logger.info("✅ MaxAdapter инициализирован (с контекстом и запретом повтора)")
+        logger.info("✅ MaxAdapter инициализирован (финальная версия)")
 
     def _register_handlers(self):
         @self.dp.bot_started()
@@ -733,7 +791,7 @@ class MaxAdapter:
             self._get_user_context(user_id)['state'] = 'awaiting_agent'
             await event.message.answer(
                 "🎬 <b>Подобрать фильм</b>\n\n"
-                "Расскажи, что ты хочешь посмотреть, и я подберу идеальные варианты!\n\n"
+                "Расскажи, что хочешь посмотреть, и я подберу идеальные варианты!\n\n"
                 "📌 <b>Что можно указать:</b>\n"
                 "• Жанр: комедия, драма, триллер, ужасы, фантастика...\n"
                 "• Настроение: весёлое, грустное, напряжённое, романтичное...\n"
@@ -885,17 +943,141 @@ class MaxAdapter:
             )
             return
 
-        # ===== ЗАГЛУШКИ В ПРОФИЛЕ =====
-        if payload == "favorites_soon":
+        # ===== ЛЮБИМЫЕ ФИЛЬМЫ =====
+        if payload.startswith("add_fav_"):
+            movie_id = int(payload.split("_")[2])
+            if add_favorite_movie(user_id, movie_id):
+                update_cinema_profile_from_movie(user_id, movie_id, 'favorite')
+                await event.message.answer("❤️ Фильм добавлен в любимые!")
+            else:
+                await event.message.answer("😢 Не удалось добавить в любимые.")
+            return
+
+        if payload.startswith("remove_fav_"):
+            movie_id = int(payload.split("_")[2])
+            if remove_favorite_movie(user_id, movie_id):
+                await event.message.answer("❤️ Фильм удалён из любимых.")
+            else:
+                await event.message.answer("😢 Не удалось удалить из любимых.")
+            return
+
+        if payload == "show_favorites":
+            await self._show_favorites(event, user_id, 0)
+            return
+
+        if payload.startswith("favorites_page_"):
+            page = int(payload.split("_")[2])
+            await self._show_favorites(event, user_id, page)
+            return
+
+        # ===== СПИСОК "БУДУ СМОТРЕТЬ" =====
+        if payload.startswith("add_watch_"):
+            movie_id = int(payload.split("_")[2])
+            if add_to_watchlist(user_id, movie_id):
+                update_cinema_profile_from_movie(user_id, movie_id, 'watchlist')
+                await event.message.answer("📌 Фильм добавлен в список «Буду смотреть»!")
+            else:
+                await event.message.answer("😢 Не удалось добавить в список.")
+            return
+
+        if payload.startswith("remove_watch_"):
+            movie_id = int(payload.split("_")[2])
+            if remove_from_watchlist(user_id, movie_id):
+                await event.message.answer("📌 Фильм удалён из списка «Буду смотреть».")
+            else:
+                await event.message.answer("😢 Не удалось удалить из списка.")
+            return
+
+        if payload == "show_watchlist":
+            await self._show_watchlist(event, user_id, 0)
+            return
+
+        if payload.startswith("watchlist_page_"):
+            page = int(payload.split("_")[2])
+            await self._show_watchlist(event, user_id, page)
+            return
+
+        # ===== НЕ ПОНРАВИЛОСЬ =====
+        if payload.startswith("add_disliked_"):
+            movie_id = int(payload.split("_")[2])
+            if add_disliked_movie(user_id, movie_id):
+                update_cinema_profile_from_movie(user_id, movie_id, 'disliked')
+                await event.message.answer(
+                    "👎 Поняла! Этот фильм больше не появится в подборках.\n\n"
+                    "💡 Если хочешь — можешь написать, что именно не понравилось: актёры, сюжет, жанр...\n"
+                    "Это поможет мне лучше понимать твой вкус! 🐾"
+                )
+            else:
+                await event.message.answer("😢 Не удалось добавить в список.")
+            return
+
+        if payload.startswith("remove_disliked_"):
+            movie_id = int(payload.split("_")[2])
+            if remove_disliked_movie(user_id, movie_id):
+                await event.message.answer("👎 Фильм убран из списка «Не понравилось».")
+            else:
+                await event.message.answer("😢 Не удалось удалить из списка.")
+            return
+
+        if payload == "show_disliked":
+            await self._show_disliked(event, user_id, 0)
+            return
+
+        if payload.startswith("disliked_page_"):
+            page = int(payload.split("_")[2])
+            await self._show_disliked(event, user_id, page)
+            return
+
+        # ===== КИНОПРОФИЛЬ =====
+        if payload == "show_cinema_profile":
+            profile_text = generate_cinema_personality(user_id)
             await event.message.answer(
-                "❤️ <b>Любимые фильмы</b>\n\n"
-                "Эта функция скоро появится!\n"
-                "Ты сможешь сохранять фильмы в любимые и возвращаться к ним в любой момент.",
+                profile_text,
                 parse_mode="html",
-                attachments=[get_action_keyboard(None, None, None)]
+                attachments=[
+                    InlineKeyboardMarkup([
+                        [{"type": "callback", "text": "🔄 Обновить профиль", "payload": "show_cinema_profile"}],
+                        [{"type": "callback", "text": "📊 Полная статистика", "payload": "show_full_profile"}],
+                        [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
+                    ])
+                ]
             )
             return
 
+        if payload == "show_full_profile":
+            # Показываем полную статистику
+            from core.user import get_cinema_profile
+            profile = get_cinema_profile(user_id)
+            stats = profile.get('statistics', {})
+            
+            text = (
+                f"📊 <b>ПОЛНАЯ СТАТИСТИКА</b>\n\n"
+                f"• Всего запросов: {stats.get('total_queries', 0)}\n"
+                f"• Подборок получено: {stats.get('total_recommendations', 0)}\n"
+                f"• Мнений запрошено: {stats.get('total_opinions', 0)}\n"
+                f"• Любимых фильмов: {stats.get('favorite_count', 0)}\n"
+                f"• Не понравилось: {stats.get('disliked_count', 0)}\n"
+                f"• В списке «Буду смотреть»: {stats.get('watchlist_count', 0)}\n"
+                f"• Просмотрено: {len(profile.get('watch_history', []))}\n\n"
+                f"🎭 <b>Любимые жанры:</b> {', '.join(profile.get('favorite_genres', [])[:5]) or 'не определены'}\n"
+                f"⭐ <b>Любимые актёры:</b> {', '.join(profile.get('favorite_actors', [])[:5]) or 'не определены'}\n"
+                f"🎥 <b>Любимые режиссёры:</b> {', '.join(profile.get('favorite_directors', [])[:5]) or 'не определены'}\n"
+            )
+            
+            await event.message.answer(
+                text,
+                parse_mode="html",
+                attachments=[
+                    InlineKeyboardMarkup([
+                        [{"type": "callback", "text": "🎯 Кинопрофиль", "payload": "show_cinema_profile"}],
+                        [{"type": "callback", "text": "🔙 В профиль", "payload": "profile"}],
+                        [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
+                    ])
+                ]
+            )
+            return
+
+        # ===== ЗАГЛУШКА "СКОРО" =====
         if payload == "feedback_soon":
             await event.message.answer(
                 "📝 <b>Мои обращения</b>\n\n"
@@ -1260,10 +1442,14 @@ class MaxAdapter:
             if movie_details:
                 card_text, _ = format_movie_card(movie_details)
                 if card_text:
+                    action_buttons = get_movie_action_buttons(movie_data['id'], user_id)
+                    opinion_button = get_opinion_button(movie_data['id'], "search")
+                    buttons = opinion_button.buttons + action_buttons.buttons
+                    keyboard = InlineKeyboardMarkup(buttons)
                     await event.message.answer(
                         card_text,
                         parse_mode='html',
-                        attachments=[get_opinion_button(movie_details['id'], "search")]
+                        attachments=[keyboard]
                     )
         
         if total_pages > 1:
@@ -1305,10 +1491,14 @@ class MaxAdapter:
             if movie_details:
                 card_text, _ = format_movie_card(movie_details, is_premiers=True)
                 if card_text:
+                    action_buttons = get_movie_action_buttons(movie_data['id'], user_id)
+                    opinion_button = get_opinion_button(movie_data['id'], "premiers")
+                    buttons = opinion_button.buttons + action_buttons.buttons
+                    keyboard = InlineKeyboardMarkup(buttons)
                     await event.message.answer(
                         card_text,
                         parse_mode='html',
-                        attachments=[get_opinion_button(movie_details['id'], "premiers")]
+                        attachments=[keyboard]
                     )
         
         if total_pages > 1:
@@ -1350,10 +1540,14 @@ class MaxAdapter:
             if movie_details:
                 card_text, _ = format_movie_card(movie_details, is_person_search=True, query=query)
                 if card_text:
+                    action_buttons = get_movie_action_buttons(movie_data['id'], user_id)
+                    opinion_button = get_opinion_button(movie_data['id'], "person")
+                    buttons = opinion_button.buttons + action_buttons.buttons
+                    keyboard = InlineKeyboardMarkup(buttons)
                     await event.message.answer(
                         card_text,
                         parse_mode='html',
-                        attachments=[get_opinion_button(movie_details['id'], "person")]
+                        attachments=[keyboard]
                     )
         
         if total_pages > 1:
@@ -1393,11 +1587,13 @@ class MaxAdapter:
         
         card_text, _ = format_movie_card(movie_details)
         if card_text:
+            action_buttons = get_movie_action_buttons(movie_id, user_id)
             buttons = [
                 [{"type": "callback", "text": "🐾 Мнение о фильме", "payload": f"opinion_{movie_id}_random"}],
                 [{"type": "callback", "text": "🎲 Новый случайный", "payload": "random"}],
                 [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
             ]
+            buttons = buttons + action_buttons.buttons
             keyboard = InlineKeyboardMarkup(buttons)
             await send_func(card_text, parse_mode='html', attachments=[keyboard])
         else:
@@ -1409,6 +1605,11 @@ class MaxAdapter:
     async def _send_profile(self, send_func, user_id):
         limits = get_user_limits(user_id)
         stats = get_user_stats(user_id, date.today().isoformat())
+        
+        fav_count = get_favorite_movies_count(user_id)
+        watch_count = get_watchlist_count(user_id)
+        disliked_count = get_disliked_count(user_id)
+        
         tariff_icons = {
             'Щенячий азарт': '🐶',
             'Охотничий': '🐕',
@@ -1421,24 +1622,55 @@ class MaxAdapter:
         regeneration_used = stats.get('regeneration_count', 0)
         regeneration_text = f"{regeneration_used}/{regeneration_limit}" if regeneration_limit > 0 else "∞"
         
+        profile_text = format_profile_for_display(user_id)
+        
         text = (
             f"{icon} <b>Твой тариф: {limits['tariff_name']}</b>\n\n"
             f"📊 <b>Лимиты на сегодня:</b>\n"
             f"• Мнений: {stats['opinion_count']}/{limits['opinion_limit']}\n"
             f"• Свежих взглядов: {regeneration_text}\n\n"
-            f"📅 Действует до: {limits['tariff_end_date'][:10]}\n"
-            f"🐾 Лимиты обновляются в полночь!\n\n"
-            f"❤️ <b>Любимые фильмы</b> — скоро здесь появится список твоих любимых фильмов!\n"
-            f"📝 <b>Мои обращения</b> — скоро здесь появятся твои обращения к тренерам!"
+            f"❤️ <b>Любимые фильмы:</b> {fav_count}\n"
+            f"📌 <b>Буду смотреть:</b> {watch_count}\n"
+            f"👎 <b>Не понравилось:</b> {disliked_count}\n\n"
+            f"{profile_text}\n\n"
         )
         
+        if limits['tariff_name'] == 'Щенячий азарт':
+            text += f"📅 Действует до: бессрочно\n"
+        else:
+            text += f"📅 Действует до: {limits['tariff_end_date'][:10]}\n"
+        
+        text += "🐾 Лимиты обновляются в полночь!\n\n"
+        
+        if limits['tariff_name'] == 'Щенячий азарт':
+            text += "💰 <b>Чтобы снять ограничения — выбери тариф:</b>"
+        
         buttons = [
-            [{"type": "callback", "text": "❤️ Любимые фильмы (скоро)", "payload": "favorites_soon"}],
-            [{"type": "callback", "text": "📝 Мои обращения (скоро)", "payload": "feedback_soon"}],
-            [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
+            [{"type": "callback", "text": f"❤️ Любимые фильмы ({fav_count})", "payload": "show_favorites"}],
+            [{"type": "callback", "text": f"📌 Буду смотреть ({watch_count})", "payload": "show_watchlist"}],
+            [{"type": "callback", "text": f"👎 Не понравилось ({disliked_count})", "payload": "show_disliked"}],
+            [{"type": "callback", "text": "🎯 Мой кинопрофиль", "payload": "show_cinema_profile"}],
         ]
+        
+        if limits['tariff_name'] == 'Щенячий азарт':
+            buttons.append([
+                {"type": "callback", "text": "🐕 Охотничий 199₽", "payload": "tariff_охотничий"},
+                {"type": "callback", "text": "🕵️ Ищейка 399₽", "payload": "tariff_ищейка"},
+                {"type": "callback", "text": "🐺 Вожак 999₽", "payload": "tariff_вожак"}
+            ])
+        
+        buttons.append([
+            {"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}
+        ])
+        
         keyboard = InlineKeyboardMarkup(buttons)
         await send_func(text, parse_mode="html", attachments=[keyboard])
+
+    # ==================== ВЫБОР ТАРИФА (ЗАГЛУШКА) ====================
+    # В _handle_callback() добавить:
+    # if payload.startswith("tariff_"):
+    #     tariff_name = payload.replace("tariff_", "").capitalize()
+    #     await event.message.answer(...)
 
     # ==================== ОБРАБОТЧИК СООБЩЕНИЙ ====================
     async def _handle_message(self, event: MessageCreated):
@@ -1478,29 +1710,110 @@ class MaxAdapter:
         else:
             await self._perform_search(event, user_id, text)
 
+    # ==================== СПИСКИ ПОЛЬЗОВАТЕЛЯ ====================
+    
+    async def _show_favorites(self, event, user_id, page=0):
+        items_per_page = 5
+        total = get_favorite_movies_count(user_id)
+        
+        if total == 0:
+            await event.message.answer(
+                "❤️ У тебя пока нет любимых фильмов.\n\n"
+                "Добавляй фильмы в любимые, и они будут появляться здесь! 🐾"
+            )
+            return
+        
+        movies = get_favorite_movies(user_id, limit=items_per_page, offset=page * items_per_page)
+        
+        text = f"❤️ <b>Твои любимые фильмы</b> (всего: {total})\n\n"
+        for movie in movies:
+            text += f"🎬 <b>{movie['name']}</b> ({movie['year']}) ⭐ {movie['rating']}\n"
+            if movie['user_rating']:
+                text += f"   Твоя оценка: {movie['user_rating']}/10\n"
+            text += f"   <a href='https://www.kinopoisk.ru/film/{movie['movie_id']}/'>Кинопоиск</a>\n\n"
+        
+        total_pages = (total + items_per_page - 1) // items_per_page
+        if total_pages > 1:
+            pagination = get_pagination_buttons(page, total_pages, "favorites", "")
+            await event.message.answer(text, parse_mode="html", attachments=[pagination])
+        else:
+            await event.message.answer(text, parse_mode="html")
+
+    async def _show_watchlist(self, event, user_id, page=0):
+        items_per_page = 5
+        total = get_watchlist_count(user_id)
+        
+        if total == 0:
+            await event.message.answer(
+                "📌 У тебя пока нет фильмов в списке «Буду смотреть».\n\n"
+                "Добавляй фильмы, и они будут появляться здесь! 🐾"
+            )
+            return
+        
+        movies = get_watchlist(user_id, limit=items_per_page, offset=page * items_per_page)
+        
+        text = f"📌 <b>Буду смотреть</b> (всего: {total})\n\n"
+        for movie in movies:
+            text += f"🎬 <b>{movie['name']}</b> ({movie['year']}) ⭐ {movie['rating']}\n"
+            text += f"   Статус: {movie['status_label']}\n"
+            text += f"   <a href='https://www.kinopoisk.ru/film/{movie['movie_id']}/'>Кинопоиск</a>\n\n"
+        
+        total_pages = (total + items_per_page - 1) // items_per_page
+        if total_pages > 1:
+            pagination = get_pagination_buttons(page, total_pages, "watchlist", "")
+            await event.message.answer(text, parse_mode="html", attachments=[pagination])
+        else:
+            await event.message.answer(text, parse_mode="html")
+
+    async def _show_disliked(self, event, user_id, page=0):
+        items_per_page = 5
+        total = get_disliked_count(user_id)
+        
+        if total == 0:
+            await event.message.answer(
+                "👎 У тебя пока нет фильмов в списке «Не понравилось».\n\n"
+                "Ставь 👎 фильмам, которые не зашли, чтобы я не предлагала их в подборках! 🐾"
+            )
+            return
+        
+        movies = get_disliked_movies(user_id, limit=items_per_page, offset=page * items_per_page)
+        
+        text = f"👎 <b>Не понравилось</b> (всего: {total})\n\n"
+        for movie in movies:
+            text += f"🎬 <b>{movie['name']}</b> ({movie['year']}) ⭐ {movie['rating']}\n"
+            if movie['reason']:
+                text += f"   Причина: {movie['reason']}\n"
+            text += f"   <a href='https://www.kinopoisk.ru/film/{movie['movie_id']}/'>Кинопоиск</a>\n\n"
+        
+        total_pages = (total + items_per_page - 1) // items_per_page
+        if total_pages > 1:
+            pagination = get_pagination_buttons(page, total_pages, "disliked", "")
+            await event.message.answer(text, parse_mode="html", attachments=[pagination])
+        else:
+            await event.message.answer(text, parse_mode="html")
+
     # ===== УТОЧНЕНИЕ ПОДБОРКИ =====
     async def _handle_refine(self, event, user_id, text):
         context = self._get_user_context(user_id)
         mode = context.get('refine_mode', 'recommend')
         original_query = context.get('last_query', '')
         
-        # Получаем ID уже показанных фильмов
         exclude_ids = context.get('shown_movie_ids', [])
+        preferences = get_user_preferences(user_id)
         
-        # Формируем запрос с уточнением и запретом повтора
         refine_query = f"{original_query}\n\nУточнение: {text}"
         
         await event.message.answer("🔄 Уточняю подборку с учётом твоих пожеланий... 🐾")
         
         try:
-            # Передаём exclude_ids в run_agent
             response = await run_agent(
                 refine_query, 
                 user_id, 
                 ai_client, 
                 agent_mode=mode,
                 exclude_ids=exclude_ids,
-                use_context=True
+                use_context=True,
+                preferences=preferences
             )
             
             if not response or len(response) < 10:
@@ -1509,20 +1822,16 @@ class MaxAdapter:
             context['refined'] = True
             context['last_response'] = response
             
-            # Извлекаем новые ID
             movie_ids = extract_movie_ids(response)[:7]
             movies_list = _prepare_movies_with_placeholders(movie_ids, response)
             movies_list = movies_list[:5]
             
-            # Обновляем список показанных ID
             new_ids = [m['id'] for m in movies_list if not m['is_missing']]
             context['shown_movie_ids'] = exclude_ids + new_ids
             
-            # Считаем реальные фильмы
             real_movies = [m for m in movies_list if not m['is_missing']]
             missing_movies = [m for m in movies_list if m['is_missing']]
             
-            # Показываем сообщение только если есть и те, и другие
             if missing_movies and real_movies:
                 await event.message.answer(
                     f"🐾 Нашла {len(real_movies)} фильмов в своей базе, "
@@ -1534,14 +1843,12 @@ class MaxAdapter:
                     "🐾 Эти фильмы пока не загружены в мою базу, но я покажу ссылки на Кинопоиск!"
                 )
             
-            # Формируем кнопки (без уточнения)
             buttons = []
             if movies_list:
                 buttons.append([
                     {"type": "callback", "text": f"🎬 Показать карточки ({len(movies_list)})", "payload": "agent_show_cards"}
                 ])
             
-            # Кнопка "Ещё" в зависимости от режима
             mode_buttons = {
                 'recommend': ('🎬 Ещё подобрать', 'agent_recommend'),
                 'actor': ('🐾 Ещё актёрский нюх', 'agent_actor'),
@@ -1581,11 +1888,9 @@ class MaxAdapter:
         context = self._get_user_context(user_id)
         agent_mode = context.get('agent_mode', 'chat')
         
-        # Сохраняем исходный запрос для уточнений
         context['last_query'] = query
         context['refined'] = False
         
-        # Проверка лимитов
         if user_id not in ADMIN_IDS:
             limits = get_user_limits(user_id)
             stats = get_user_stats(user_id, date.today().isoformat())
@@ -1601,13 +1906,11 @@ class MaxAdapter:
             await event.message.answer("😢 Генерация временно недоступна.")
             return
 
-        # ===== УНИВЕРСАЛЬНЫЕ СООБЩЕНИЯ ДЛЯ РЕЖИМОВ =====
         mode_messages = {
             'recommend': "🎬 Отбираю фильмы под твой вкус... Это займёт пару минут, я внимательно принюхиваюсь! 🐕‍🦺",
             'actor': "🐾 Бегу по следам великой личности... 🔍",
             'plot_search': "🔎 Нюхаю сюжеты... Дай мне пару минут, я найду самые интересные варианты! 🐕",
             'compare': "⭐ Сравниваю фильмы... Сейчас разложу всё по полочкам! 🧐",
-            # chat — НЕ ДОБАВЛЯЕМ, чтобы не дублировать
         }
         
         if agent_mode in mode_messages:
@@ -1615,7 +1918,6 @@ class MaxAdapter:
 
         # ===== РЕЖИМ "ПООБЩАТЬСЯ" =====
         if agent_mode == 'chat':
-            # Если похоже на поиск
             if _is_search_intent(query):
                 buttons = [
                     [{"type": "callback", "text": "🔍 Поиск по названию", "payload": "search"}],
@@ -1631,7 +1933,6 @@ class MaxAdapter:
                 )
                 return
             
-            # Если похоже на подборку
             if _is_recommend_intent(query):
                 buttons = [
                     [{"type": "callback", "text": "🎬 Подобрать фильм", "payload": "agent_recommend"}],
@@ -1648,7 +1949,6 @@ class MaxAdapter:
                 )
                 return
             
-            # Обычный режим — короткий ответ
             thinking_msg = await event.message.answer("💬 Дай-ка подумаю... 🐾")
             
             async def delete_after_delay():
@@ -1682,37 +1982,36 @@ class MaxAdapter:
 
         # ===== ВСЕ РЕЖИМЫ КИНОЛОГОВО =====
         try:
-            # Получаем ID уже показанных фильмов (если есть)
             exclude_ids = context.get('shown_movie_ids', [])
+            preferences = get_user_preferences(user_id)
             
-            # Вызываем агента с контекстом и запретом повтора
             response = await run_agent(
                 query, 
                 user_id, 
                 ai_client, 
                 agent_mode=agent_mode,
                 exclude_ids=exclude_ids,
-                use_context=True
+                use_context=True,
+                preferences=preferences
             )
+            
+            # Обновляем профиль из запроса
+            update_cinema_profile_from_query(user_id, query, agent_mode)
             
             if user_id not in ADMIN_IDS:
                 increment_stat_counter(user_id, 'opinion_count')
             
-            # Извлекаем ID из ссылок
             movie_ids = extract_movie_ids(response)[:7]
             movies_list = _prepare_movies_with_placeholders(movie_ids, response)
             movies_list = movies_list[:5]
             
-            # Сохраняем ID показанных фильмов
             shown_ids = [m['id'] for m in movies_list if not m['is_missing']]
             context['shown_movie_ids'] = exclude_ids + shown_ids
             context['last_response'] = response
             
-            # Считаем реальные фильмы
             real_movies = [m for m in movies_list if not m['is_missing']]
             missing_movies = [m for m in movies_list if m['is_missing']]
             
-            # Показываем сообщение только если есть и те, и другие
             if missing_movies and real_movies:
                 await event.message.answer(
                     f"🐾 Нашла {len(real_movies)} фильмов в своей базе, "
@@ -1724,20 +2023,17 @@ class MaxAdapter:
                     "🐾 Эти фильмы пока не загружены в мою базу, но я покажу ссылки на Кинопоиск!"
                 )
             
-            # Формируем кнопки
             buttons = []
             if movies_list:
                 buttons.append([
                     {"type": "callback", "text": f"🎬 Показать карточки ({len(movies_list)})", "payload": "agent_show_cards"}
                 ])
             
-            # Кнопка уточнения — только если ещё не уточняли
             if not context.get('refined', False) and movies_list:
                 buttons.append([
                     {"type": "callback", "text": "🔄 Уточнить подборку", "payload": f"agent_refine_{agent_mode}"}
                 ])
             
-            # Кнопка "Ещё" в зависимости от режима
             mode_buttons = {
                 'recommend': ('🎬 Ещё подобрать', 'agent_recommend'),
                 'actor': ('🐾 Ещё актёрский нюх', 'agent_actor'),
@@ -1778,12 +2074,10 @@ class MaxAdapter:
         
         for movie_data in movies_list[:5]:
             if movie_data.get('is_missing'):
-                # Показываем заглушку
                 card = format_missing_movie_card(
                     movie_data['id'],
                     movie_data.get('name')
                 )
-                # Кнопка для поиска
                 buttons = [
                     [{"type": "callback", "text": "🔍 Поискать на других просторах", "payload": f"search_elsewhere_{movie_data['id']}"}],
                     [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
@@ -1791,13 +2085,16 @@ class MaxAdapter:
                 keyboard = InlineKeyboardMarkup(buttons)
                 await event.message.answer(card, parse_mode='html', attachments=[keyboard])
             else:
-                # Показываем нормальную карточку
                 card_text, _ = format_movie_card(movie_data['details'])
                 if card_text:
+                    action_buttons = get_movie_action_buttons(movie_data['id'], user_id)
+                    opinion_button = get_opinion_button(movie_data['id'], "search")
+                    buttons = opinion_button.buttons + action_buttons.buttons
+                    keyboard = InlineKeyboardMarkup(buttons)
                     await event.message.answer(
                         card_text,
                         parse_mode='html',
-                        attachments=[get_opinion_button(movie_data['id'], "search")]
+                        attachments=[keyboard]
                     )
         
         context['movies'] = []
@@ -1897,6 +2194,7 @@ class MaxAdapter:
             opinion = await self._generate_opinion(movie_details)
             if opinion:
                 save_opinion_cache(movie_id, opinion)
+                update_cinema_profile_from_movie(user_id, movie_id, 'opinion')
                 await self._send_formatted_opinion(
                     send_func, user_id, movie_id, movie_details, opinion, source
                 )
