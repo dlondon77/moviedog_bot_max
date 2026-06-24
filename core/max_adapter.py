@@ -485,9 +485,18 @@ def get_movie_action_buttons(movie_id: int, user_id: int) -> InlineKeyboardMarku
     """Кнопки действий с фильмом (любимые, буду смотреть, не понравилось)"""
     buttons = []
     
-    is_fav = is_favorite(user_id, movie_id)
-    is_watch = is_in_watchlist(user_id, movie_id)
-    is_bad = is_disliked(user_id, movie_id)
+    # Защита от неправильных типов
+    if not isinstance(user_id, int):
+        logger.warning(f"Некорректный user_id: {user_id} (тип: {type(user_id)})")
+        return InlineKeyboardMarkup(buttons)
+    
+    try:
+        is_fav = is_favorite(user_id, movie_id)
+        is_watch = is_in_watchlist(user_id, movie_id)
+        is_bad = is_disliked(user_id, movie_id)
+    except Exception as e:
+        logger.error(f"Ошибка проверки статусов фильма {movie_id}: {e}")
+        return InlineKeyboardMarkup(buttons)
     
     # Любимые
     if is_fav:
