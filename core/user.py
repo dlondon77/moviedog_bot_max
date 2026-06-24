@@ -238,6 +238,11 @@ def remove_favorite_movie(user_id: int, movie_id: int) -> bool:
 
 def is_favorite(user_id: int, movie_id: int) -> bool:
     """Проверяет, есть ли фильм в любимых"""
+    # Защита от неправильных типов
+    if not isinstance(user_id, int) or not isinstance(movie_id, int):
+        logger.warning(f"Некорректные типы: user_id={user_id} (тип: {type(user_id)}), movie_id={movie_id}")
+        return False
+    
     conn = db.get_opinions_db_connection()
     cursor = conn.cursor()
     cursor.execute('''
@@ -342,6 +347,10 @@ def remove_from_watchlist(user_id: int, movie_id: int) -> bool:
 
 def is_in_watchlist(user_id: int, movie_id: int) -> bool:
     """Проверяет, есть ли фильм в списке 'Буду смотреть'"""
+    if not isinstance(user_id, int) or not isinstance(movie_id, int):
+        logger.warning(f"Некорректные типы: user_id={user_id}, movie_id={movie_id}")
+        return False
+    
     conn = db.get_opinions_db_connection()
     cursor = conn.cursor()
     cursor.execute('''
@@ -452,6 +461,10 @@ def remove_disliked_movie(user_id: int, movie_id: int) -> bool:
 
 def is_disliked(user_id: int, movie_id: int) -> bool:
     """Проверяет, есть ли фильм в списке 'Не понравилось'"""
+    if not isinstance(user_id, int) or not isinstance(movie_id, int):
+        logger.warning(f"Некорректные типы: user_id={user_id}, movie_id={movie_id}")
+        return False
+    
     conn = db.get_opinions_db_connection()
     cursor = conn.cursor()
     cursor.execute('''
