@@ -1,5 +1,4 @@
-# core/movie.py — ДОПОЛНЕННАЯ ВЕРСИЯ (добавлена функция format_missing_movie_card)
-
+# core/movie.py
 import sqlite3
 import logging
 import random
@@ -280,7 +279,7 @@ def get_premier_movies_from_db() -> list:
         conn.close()
 
 def format_movie_card(movie, is_premiers=False, query=None, is_person_search=False):
-    """Форматирует карточку фильма для отправки пользователю с правильной ссылкой на Кинопоиск"""
+    """Форматирует карточку фильма с секретной ссылкой"""
     if not movie or not isinstance(movie, dict):
         return None, None
 
@@ -358,6 +357,7 @@ def format_movie_card(movie, is_premiers=False, query=None, is_person_search=Fal
         
         poster_url = movie.get('poster_url', f"https://st.kp.yandex.net/images/film_big/{movie_id}.jpg")
         kp_url = f"https://www.kinopoisk.ru/film/{movie_id}/" if movie_id else "https://www.kinopoisk.ru/"
+        kp_cx_url = f"https://www.kinopoisk.cx/film/{movie_id}/" if movie_id else "https://www.kinopoisk.cx/"
         
         card = (
             f"🎬 <b>{title}</b> {year_display}\n"
@@ -369,7 +369,8 @@ def format_movie_card(movie, is_premiers=False, query=None, is_person_search=Fal
             f"📝 <b>Описание:</b>\n<i>{description}</i>\n\n"
             f"🎥 <b>Режиссер:</b> {directors}\n"
             f"👥 <b>Актеры:</b> {actors}\n\n"
-            f"🔗 <a href='{kp_url}'>Кинопоиск</a>: {kp_url}"
+            f"🔗 <a href='{kp_url}'>Кинопоиск</a>\n"
+            f"👁️ <a href='{kp_cx_url}'>Секретный просмотр</a>"
         )
         
         return card, None
@@ -384,6 +385,7 @@ def format_missing_movie_card(movie_id: int, movie_name: str = None) -> str:
     Создаёт карточку-заглушку для фильма, которого нет в БД
     """
     kp_url = f"https://www.kinopoisk.ru/film/{movie_id}/"
+    kp_cx_url = f"https://www.kinopoisk.cx/film/{movie_id}/"
     
     if not movie_name:
         movie_name = f"Фильм (ID: {movie_id})"
@@ -396,7 +398,8 @@ def format_missing_movie_card(movie_id: int, movie_name: str = None) -> str:
         f"🎭 Жанр: <b>неизвестен</b>\n\n"
         f"📝 <b>Описание:</b>\n"
         f"<i>Этот фильм пока не загружен в мою базу данных. 🐾</i>\n\n"
-        f"🔗 <a href='{kp_url}'>Смотреть на Кинопоиске</a>"
+        f"🔗 <a href='{kp_url}'>Кинопоиск</a>\n"
+        f"👁️ <a href='{kp_cx_url}'>Секретный просмотр</a>"
     )
     
     return card
@@ -463,68 +466,6 @@ def search_movies_with_filters(query, filters=None, count_only=False):
 def format_filter_keyboard(query, current_filters=None, total_count=0, has_more=False):
     """Заглушка для Max — клавиатуры с фильтрами пока не поддерживаются"""
     return None
-
-def add_favorite_movie(user_id, movie_id):
-    """Добавляет фильм в любимые"""
-    conn = db.get_opinions_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute('''
-            INSERT OR IGNORE INTO favorite_movies (user_id, movie_id, added_at)
-            VALUES (?, ?, ?)
-        ''', (user_id, movie_id, datetime.now().isoformat()))
-        conn.commit()
-        return True
-    except Exception as e:
-        logger.error(f"Ошибка добавления в любимые: {e}")
-        return False
-    finally:
-        conn.close()
-
-def remove_favorite_movie(user_id, movie_id):
-    """Удаляет фильм из любимых"""
-    conn = db.get_opinions_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute('''
-            DELETE FROM favorite_movies 
-            WHERE user_id = ? AND movie_id = ?
-        ''', (user_id, movie_id))
-        conn.commit()
-        return cursor.rowcount > 0
-    except Exception as e:
-        logger.error(f"Ошибка удаления из любимых: {e}")
-        return False
-    finally:
-        conn.close()
-
-def is_favorite(user_id, movie_id):
-    """Проверяет, есть ли фильм в любимых"""
-    conn = db.get_opinions_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT 1 FROM favorite_movies 
-        WHERE user_id = ? AND movie_id = ?
-    ''', (user_id, movie_id))
-    result = cursor.fetchone()
-    conn.close()
-    return result is not None
-
-def get_favorite_movies(user_id, limit=10, offset=0):
-    """Получает список любимых фильмов"""
-    conn = db.get_opinions_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT fm.movie_id, fm.added_at, m.name, m.year, m.rating
-        FROM favorite_movies fm
-        JOIN movies m ON fm.movie_id = m.id
-        WHERE fm.user_id = ?
-        ORDER BY fm.added_at DESC
-        LIMIT ? OFFSET ?
-    ''', (user_id, limit, offset))
-    movies = cursor.fetchall()
-    conn.close()
-    return [{'movie_id': row[0], 'added_at': row[1], 'name': row[2], 'year': row[3], 'rating': row[4]} for row in movies]
 
 def search_movies_by_description(query: str, limit: int = 5) -> list:
     """Ищет фильмы по ключевым словам в описании"""
