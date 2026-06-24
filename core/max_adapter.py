@@ -865,7 +865,7 @@ class MaxAdapter:
             )
             return
 
-        # ===== ПОИСК НА ДРУГИХ ПРОСТОРАХ (заглушка) =====
+        # ===== ПОИСК НА ДРУГИХ ПРОСТОРАХ =====
         if payload.startswith("search_elsewhere_"):
             movie_id = int(payload.split("_")[2])
             await event.message.answer(
