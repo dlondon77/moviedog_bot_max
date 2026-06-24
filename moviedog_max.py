@@ -3,6 +3,7 @@ import asyncio
 import logging
 import configparser
 from core.max_adapter import MaxAdapter
+from core.db import init_db  # <-- ДОБАВИТЬ
 
 # Настройка логирования
 logging.basicConfig(
@@ -16,6 +17,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 async def main():
+    # Инициализация базы данных
+    init_db()  # <-- ДОБАВИТЬ
     logger.info("🚀 Запуск Max-бота")
     adapter = MaxAdapter()
     await adapter.run()
