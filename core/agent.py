@@ -1,7 +1,10 @@
-# core/agent.py — С ПОДДЕРЖКОЙ КОНТЕКСТА И ЗАПРЕТОМ ПОВТОРА
-# + Единая история диалога для всех режимов
-# + Передача уже показанных ID для запрета повтора
+# core/agent.py — ОПТИМИЗИРОВАННАЯ ВЕРСИЯ
+# Вся ИИ-логика вынесена сюда. max_adapter.py только вызывает run_agent()
+# + Режимные промпты (recommend, actor, plot_search, compare, chat)
+# + format_response() — скрывает ID в HTML-комментарии
+# + extract_movie_ids() — извлекает ID из скрытых комментариев
 # + Запрет на "сохранить в любимые"
+# + Мнение о фильме НЕ ЗДЕСЬ (остаётся в max_adapter.py)
 
 import json
 import logging
@@ -199,14 +202,14 @@ def get_chat_prompt(query: str) -> str:
 # ==================== ФОРМАТИРОВАНИЕ ОТВЕТА ====================
 
 def format_response(response: str) -> str:
-    """Форматирует ответ агента — скрывает ID, но оставляет их в скрытом виде"""
+    """Форматирует ответ агента — скрывает ID, убирает дубли"""
     if not response:
         return response
     
     # Убираем множественные переносы
     response = re.sub(r'\n{3,}', '\n\n', response)
     
-    # Скрываем ID в HTML-комментарии, но не удаляем
+    # Скрываем ID в HTML-комментарии
     response = re.sub(r'\(ID:\s*(\d+)\)', r'<!--ID:\1-->', response)
     
     # Убираем служебные фразы для сравнения
@@ -221,6 +224,16 @@ def format_response(response: str) -> str:
     response = re.sub(r'_{3,}', '', response)
     response = re.sub(r'\*{3,}', '', response)
     
+    # Убираем дублирование рекомендаций
+    if "Мой совет" in response and "Мой вердикт" in response:
+        совет_pos = response.find("Мой совет")
+        вердикт_pos = response.find("Мой вердикт")
+        if вердикт_pos > совет_pos:
+            before_verdict = response[:вердикт_pos].strip()
+            after_verdict = response[вердикт_pos:].strip()
+            if len(after_verdict) < 50 or "---" in after_verdict:
+                response = before_verdict
+    
     # Чистим лишние переносы после удаления
     response = re.sub(r'\n{3,}', '\n\n', response)
     
@@ -231,13 +244,13 @@ def extract_movie_ids(text: str) -> List[int]:
     """Извлекает ID фильмов из ответа агента — приоритет у ссылок"""
     ids = []
     
-    # ПАТТЕРН 1: ссылка на Кинопоиск (САМЫЙ НАДЁЖНЫЙ!)
+    # ПАТТЕРН 1: ссылка на Кинопоиск (film или series)
     pattern_link = r'https?://www\.kinopoisk\.ru/(?:film|series)/(\d+)/'
     link_matches = re.findall(pattern_link, text)
     for m in link_matches:
         ids.append(int(m))
     
-    # Если нашли ID в ссылках — возвращаем их (они самые надёжные)
+    # Если нашли ID в ссылках — возвращаем их
     if ids:
         return list(set(ids))
     
@@ -247,18 +260,11 @@ def extract_movie_ids(text: str) -> List[int]:
     for m in matches:
         ids.append(int(m))
     
-    # ПАТТЕРН 3: (ID: 123) — если остались
+    # ПАТТЕРН 3: (ID: 123)
     pattern = r'\(ID:\s*(\d+)\)'
     matches = re.findall(pattern, text)
     for m in matches:
         ids.append(int(m))
-    
-    # ПАТТЕРН 4: просто число в скобках (4-7 цифр, не год)
-    pattern3 = r'\((\d{4,7})\)'
-    matches3 = re.findall(pattern3, text)
-    for m in matches3:
-        if len(m) >= 4 and int(m) > 1900:
-            ids.append(int(m))
     
     return list(set(ids))
 
@@ -723,13 +729,12 @@ def _build_context_from_history(user_id: int, max_messages: int = 4) -> str:
     if not history:
         return ""
     
-    # Берём последние max_messages сообщений (пользователь + ассистент)
     recent = history[-max_messages:] if len(history) > max_messages else history
     
     context_lines = []
     for msg in recent:
         role = "Пользователь" if msg["role"] == "user" else "КиноИщейка"
-        context_lines.append(f"{role}: {msg['content'][:200]}...")  # Обрезаем для краткости
+        context_lines.append(f"{role}: {msg['content'][:200]}...")
     
     return "\n".join(context_lines)
 
@@ -759,18 +764,15 @@ async def run_agent(
     - exclude_ids: ID фильмов, которые уже показывали (запрет повтора)
     - use_context: использовать ли историю диалога
     """
-    # Строим контекст из истории
     context_text = ""
     if use_context:
         context_text = _build_context_from_history(user_id, max_messages=4)
     
-    # Выбираем системный промпт
     if agent_mode == 'chat' or chat_mode:
         system_prompt = CHAT_SYSTEM_PROMPT
     else:
         system_prompt = SYSTEM_PROMPT
     
-    # Выбираем промпт в зависимости от режима
     if agent_mode == 'recommend':
         final_query = get_recommend_prompt(user_query, exclude_ids, context_text)
     elif agent_mode == 'actor':
@@ -782,14 +784,12 @@ async def run_agent(
     elif agent_mode == 'chat' or chat_mode:
         final_query = get_chat_prompt(user_query)
     else:
-        # fallback — используем user_query как есть
         final_query = user_query
     
     messages = [
         {"role": "system", "content": system_prompt}
     ]
     
-    # Добавляем историю (кроме режима chat, там своя логика)
     if agent_mode != 'chat' and not chat_mode:
         history = CHAT_HISTORY.get(user_id, [])
         if history:
@@ -834,11 +834,8 @@ async def run_agent(
         else:
             raw_response = message.content
             clean_response = _clean_markdown(raw_response)
-            
-            # Форматируем ответ (скрываем ID в комментарии)
             formatted_response = format_response(clean_response)
             
-            # Сохраняем историю (для всех режимов)
             add_to_history(user_id, "user", user_query)
             add_to_history(user_id, "assistant", formatted_response)
             
