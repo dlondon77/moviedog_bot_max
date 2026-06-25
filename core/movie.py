@@ -378,29 +378,29 @@ def format_movie_card(movie, is_premiers=False, query=None, is_person_search=Fal
         logger.error(f"Ошибка форматирования карточки фильма: {e}")
         return None, None
 
-
-def format_missing_movie_card(movie_id: int, movie_name: str = None) -> str:
+def format_missing_movie_card(movie_id: int, movie_name: str = None, is_series: bool = False) -> str:
     """
     Создаёт карточку-заглушку для фильма, которого нет в БД
     """
-    kp_url = f"https://www.kinopoisk.ru/film/{movie_id}/"
+    # Для сериалов используем series, для фильмов — film
+    url_type = "series" if is_series else "film"
+    kp_url = f"https://www.kinopoisk.ru/{url_type}/{movie_id}/"
     
     if not movie_name:
-        movie_name = f"Фильм (ID: {movie_id})"
+        movie_name = f"{'Сериал' if is_series else 'Фильм'} (ID: {movie_id})"
     
     card = (
         f"🎬 <b>{movie_name}</b>\n"
-        f"📁 Тип: <b>фильм</b>\n"
+        f"📁 Тип: <b>{'сериал' if is_series else 'фильм'}</b>\n"
         f"⭐ Рейтинг Кинопоиска: <b>неизвестен</b>\n"
         f"🌍 Страна: <b>неизвестна</b>\n"
         f"🎭 Жанр: <b>неизвестен</b>\n\n"
         f"📝 <b>Описание:</b>\n"
-        f"<i>Этот фильм пока не загружен в мою базу данных. 🐾</i>\n\n"
+        f"<i>Этот {'сериал' if is_series else 'фильм'} пока не загружен в мою базу данных. 🐾</i>\n\n"
         f"🔗 <a href='{kp_url}'>Смотреть на Кинопоиске</a>"
     )
     
     return card
-
 
 def search_movies_with_filters(query, filters=None, count_only=False):
     """Поиск фильмов с фильтрами"""
