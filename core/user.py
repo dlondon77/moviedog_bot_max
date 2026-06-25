@@ -1,218 +1,190 @@
-# core/user.py
+# core/user.py — С ПОДДЕРЖКОЙ КИНОПРОФИЛЯ И СПИСКОВ
+
 import logging
 import sqlite3
 from datetime import datetime, date, timedelta
-from typing import Dict, List, Optional
+from typing import List, Dict, Optional, Tuple
+import json
 
 from core import db
 from core import movie as movie_module
 
 logger = logging.getLogger(__name__)
 
-# ==================== КОНСТАНТЫ ====================
+# ==================== ОСНОВНЫЕ ФУНКЦИИ ПОЛЬЗОВАТЕЛЯ ====================
 
-TARIFFS = {
-    'Щенячий азарт': {
-        'opinion_limit': 5,
-        'regeneration_limit': 0,
-        'agent_limit': 1,
-        'price': 0,
-        'icon': '🐶'
-    },
-    'Охотничий': {
-        'opinion_limit': 10,
-        'regeneration_limit': 0,
-        'agent_limit': 5,
-        'price': 199,
-        'icon': '🐕'
-    },
-    'Ищейка': {
-        'opinion_limit': 30,
-        'regeneration_limit': 5,
-        'agent_limit': 20,
-        'price': 399,
-        'icon': '🕵️'
-    },
-    'Вожак': {
-        'opinion_limit': -1,  # -1 = безлимит
-        'regeneration_limit': -1,
-        'agent_limit': -1,
-        'price': 999,
-        'icon': '🐺'
-    }
-}
-
-DEFAULT_TARIFF = 'Щенячий азарт'
-
-
-# ==================== ПОЛЬЗОВАТЕЛИ ====================
-
-def register_user(user_id: int, username: str = '', first_name: str = '', last_name: str = '', platform: str = 'max') -> bool:
-    """Регистрирует нового пользователя"""
+def register_user(user_id: int, username: str = '', first_name: str = '', last_name: str = '', platform: str = 'max'):
+    """Регистрирует пользователя"""
     conn = db.get_opinions_db_connection()
     cursor = conn.cursor()
     try:
         cursor.execute('''
-            INSERT OR IGNORE INTO users (user_id, username, first_name, last_name, platform, tariff_name, registered_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (user_id, username[:50], first_name[:50], last_name[:50], platform, DEFAULT_TARIFF, datetime.now().isoformat()))
+            INSERT OR IGNORE INTO users (user_id, username, first_name, last_name, platform, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (user_id, username, first_name, last_name, platform, datetime.now().isoformat()))
         conn.commit()
-        return True
     except Exception as e:
         logger.error(f"Ошибка регистрации пользователя {user_id}: {e}")
-        return False
-    finally:
-        conn.close()
-
-def get_user_tariff(user_id: int) -> str:
-    """Возвращает тариф пользователя"""
-    conn = db.get_opinions_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT tariff_name FROM users WHERE user_id = ?
-    ''', (user_id,))
-    row = cursor.fetchone()
-    conn.close()
-    if row:
-        return row[0] or DEFAULT_TARIFF
-    return DEFAULT_TARIFF
-
-def set_user_tariff(user_id: int, tariff_name: str, duration_days: int = 30) -> bool:
-    """Устанавливает тариф пользователю"""
-    if tariff_name not in TARIFFS:
-        return False
-    
-    end_date = (datetime.now() + timedelta(days=duration_days)).isoformat()
-    
-    conn = db.get_opinions_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute('''
-            UPDATE users 
-            SET tariff_name = ?, tariff_end_date = ?
-            WHERE user_id = ?
-        ''', (tariff_name, end_date, user_id))
-        conn.commit()
-        return True
-    except Exception as e:
-        logger.error(f"Ошибка установки тарифа: {e}")
-        return False
     finally:
         conn.close()
 
 def get_user_limits(user_id: int) -> Dict:
-    """Возвращает лимиты пользователя на сегодня"""
-    tariff_name = get_user_tariff(user_id)
-    tariff = TARIFFS.get(tariff_name, TARIFFS[DEFAULT_TARIFF])
-    
-    return {
-        'tariff_name': tariff_name,
-        'opinion_limit': tariff['opinion_limit'],
-        'regeneration_limit': tariff['regeneration_limit'],
-        'agent_limit': tariff['agent_limit'],
-        'price': tariff['price'],
-        'icon': tariff['icon'],
-        'tariff_end_date': _get_tariff_end_date(user_id)
-    }
-
-def _get_tariff_end_date(user_id: int) -> str:
-    """Возвращает дату окончания тарифа"""
+    """Возвращает лимиты пользователя на основе тарифа"""
     conn = db.get_opinions_db_connection()
     cursor = conn.cursor()
     cursor.execute('''
-        SELECT tariff_end_date FROM users WHERE user_id = ?
+        SELECT tariff_name, tariff_end_date 
+        FROM users 
+        WHERE user_id = ?
     ''', (user_id,))
     row = cursor.fetchone()
     conn.close()
-    if row and row[0]:
-        return row[0]
-    return 'бессрочно'
-
-def get_user_stats(user_id: int, stat_date: str = None) -> Dict:
-    """Возвращает статистику пользователя за день"""
-    if stat_date is None:
-        stat_date = date.today().isoformat()
     
+    if not row:
+        return {
+            'tariff_name': 'Щенячий азарт',
+            'tariff_end_date': 'бессрочно',
+            'opinion_limit': 5,
+            'regeneration_limit': 0,
+            'agent_limit': 1
+        }
+    
+    tariff_name = row[0] or 'Щенячий азарт'
+    tariff_end_date = row[1] or 'бессрочно'
+    
+    tariff_limits = {
+        'Щенячий азарт': {'opinion_limit': 5, 'regeneration_limit': 0, 'agent_limit': 1},
+        'Охотничий': {'opinion_limit': 10, 'regeneration_limit': 0, 'agent_limit': 5},
+        'Ищейка': {'opinion_limit': 30, 'regeneration_limit': 5, 'agent_limit': 20},
+        'Вожак': {'opinion_limit': 999999, 'regeneration_limit': 999999, 'agent_limit': 999999},
+    }
+    
+    limits = tariff_limits.get(tariff_name, tariff_limits['Щенячий азарт'])
+    limits['tariff_name'] = tariff_name
+    limits['tariff_end_date'] = tariff_end_date
+    
+    return limits
+
+def get_user_stats(user_id: int, date_str: str) -> Dict:
+    """Возвращает статистику пользователя за день"""
     conn = db.get_opinions_db_connection()
     cursor = conn.cursor()
     cursor.execute('''
-        SELECT opinion_count, regeneration_count, agent_count
-        FROM user_stats
-        WHERE user_id = ? AND stat_date = ?
-    ''', (user_id, stat_date))
+        SELECT opinion_count, regeneration_count, agent_query_count
+        FROM user_stats 
+        WHERE user_id = ? AND date = ?
+    ''', (user_id, date_str))
     row = cursor.fetchone()
     conn.close()
     
-    if row:
+    if not row:
         return {
-            'opinion_count': row[0] or 0,
-            'regeneration_count': row[1] or 0,
-            'agent_count': row[2] or 0
+            'opinion_count': 0,
+            'regeneration_count': 0,
+            'agent_query_count': 0
         }
-    return {'opinion_count': 0, 'regeneration_count': 0, 'agent_count': 0}
+    
+    return {
+        'opinion_count': row[0] or 0,
+        'regeneration_count': row[1] or 0,
+        'agent_query_count': row[2] or 0
+    }
 
-def increment_stat_counter(user_id: int, stat_type: str) -> bool:
-    """Увеличивает счётчик статистики"""
-    stat_date = date.today().isoformat()
-    valid_types = ['opinion_count', 'regeneration_count', 'agent_count']
-    
-    if stat_type not in valid_types:
-        return False
-    
+def increment_stat_counter(user_id: int, stat_type: str):
+    """Увеличивает счётчик статистики пользователя"""
+    today = date.today().isoformat()
     conn = db.get_opinions_db_connection()
     cursor = conn.cursor()
-    try:
-        cursor.execute(f'''
-            INSERT INTO user_stats (user_id, stat_date, {stat_type})
-            VALUES (?, ?, 1)
-            ON CONFLICT(user_id, stat_date) DO UPDATE SET
-                {stat_type} = {stat_type} + 1
-        ''', (user_id, stat_date))
-        conn.commit()
-        return True
-    except Exception as e:
-        logger.error(f"Ошибка обновления статистики: {e}")
-        return False
-    finally:
-        conn.close()
+    
+    # Создаём запись, если её нет
+    cursor.execute('''
+        INSERT OR IGNORE INTO user_stats (user_id, date, opinion_count, regeneration_count, agent_query_count)
+        VALUES (?, ?, 0, 0, 0)
+    ''', (user_id, today))
+    
+    # Обновляем нужный счётчик
+    if stat_type == 'opinion_count':
+        cursor.execute('''
+            UPDATE user_stats 
+            SET opinion_count = opinion_count + 1 
+            WHERE user_id = ? AND date = ?
+        ''', (user_id, today))
+    elif stat_type == 'regeneration_count':
+        cursor.execute('''
+            UPDATE user_stats 
+            SET regeneration_count = regeneration_count + 1 
+            WHERE user_id = ? AND date = ?
+        ''', (user_id, today))
+    elif stat_type == 'agent_query_count':
+        cursor.execute('''
+            UPDATE user_stats 
+            SET agent_query_count = agent_query_count + 1 
+            WHERE user_id = ? AND date = ?
+        ''', (user_id, today))
+    
+    conn.commit()
+    conn.close()
 
-def record_user_opinion(user_id: int, movie_id: int, opinion_text: str = '') -> bool:
-    """Записывает мнение пользователя о фильме"""
+def record_user_opinion(user_id: int, movie_id: int):
+    """Записывает, что пользователь запросил мнение о фильме"""
+    conn = db.get_opinions_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT OR IGNORE INTO user_opinions (user_id, movie_id, created_at)
+        VALUES (?, ?, ?)
+    ''', (user_id, movie_id, datetime.now().isoformat()))
+    conn.commit()
+    conn.close()
+
+def record_user_query(user_id: int, query: str, agent_mode: str = 'search'):
+    """Записывает историю запросов пользователя"""
     conn = db.get_opinions_db_connection()
     cursor = conn.cursor()
     try:
         cursor.execute('''
-            INSERT OR REPLACE INTO user_movie_opinions (user_id, movie_id, opinion_text, created_at)
+            INSERT INTO user_query_history (user_id, query, agent_mode, created_at)
             VALUES (?, ?, ?, ?)
-        ''', (user_id, movie_id, opinion_text, datetime.now().isoformat()))
+        ''', (user_id, query[:200], agent_mode, datetime.now().isoformat()))
         conn.commit()
-        return True
     except Exception as e:
-        logger.error(f"Ошибка записи мнения пользователя: {e}")
-        return False
+        logger.error(f"Ошибка записи истории запросов: {e}")
     finally:
         conn.close()
 
+def get_user_query_history(user_id: int, limit: int = 50) -> List[Dict]:
+    """Получает историю запросов пользователя"""
+    conn = db.get_opinions_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT query, agent_mode, created_at
+        FROM user_query_history
+        WHERE user_id = ?
+        ORDER BY created_at DESC
+        LIMIT ?
+    ''', (user_id, limit))
+    rows = cursor.fetchall()
+    conn.close()
+    return [
+        {'query': row[0], 'agent_mode': row[1], 'created_at': row[2]}
+        for row in rows
+    ]
 
-# ==================== ЛЮБИМЫЕ ФИЛЬМЫ ====================
 
-def add_favorite_movie(user_id: int, movie_id: int, rating: int = 0, review: str = '') -> bool:
+# ==================== СПИСКИ ФИЛЬМОВ ====================
+
+# ---- ЛЮБИМЫЕ ФИЛЬМЫ ----
+
+def add_favorite_movie(user_id: int, movie_id: int) -> bool:
     """Добавляет фильм в любимые"""
-    # Проверяем, есть ли фильм в БД
-    movie = movie_module.get_movie_details(movie_id)
-    if not movie:
-        logger.warning(f"Фильм {movie_id} не найден в БД")
-        return False
-    
     conn = db.get_opinions_db_connection()
     cursor = conn.cursor()
     try:
         cursor.execute('''
-            INSERT OR REPLACE INTO favorite_movies (user_id, movie_id, added_at, user_rating, review)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (user_id, movie_id, datetime.now().isoformat(), rating, review))
+            INSERT OR IGNORE INTO favorite_movies (user_id, movie_id, added_at)
+            VALUES (?, ?, ?)
+        ''', (user_id, movie_id, datetime.now().isoformat()))
         conn.commit()
-        return True
+        return cursor.rowcount > 0
     except Exception as e:
         logger.error(f"Ошибка добавления в любимые: {e}")
         return False
@@ -225,8 +197,7 @@ def remove_favorite_movie(user_id: int, movie_id: int) -> bool:
     cursor = conn.cursor()
     try:
         cursor.execute('''
-            DELETE FROM favorite_movies 
-            WHERE user_id = ? AND movie_id = ?
+            DELETE FROM favorite_movies WHERE user_id = ? AND movie_id = ?
         ''', (user_id, movie_id))
         conn.commit()
         return cursor.rowcount > 0
@@ -241,83 +212,56 @@ def is_favorite(user_id: int, movie_id: int) -> bool:
     conn = db.get_opinions_db_connection()
     cursor = conn.cursor()
     cursor.execute('''
-        SELECT 1 FROM favorite_movies 
-        WHERE user_id = ? AND movie_id = ?
+        SELECT 1 FROM favorite_movies WHERE user_id = ? AND movie_id = ?
     ''', (user_id, movie_id))
     result = cursor.fetchone()
     conn.close()
     return result is not None
 
-def get_favorite_movies(user_id: int, limit: int = 20, offset: int = 0) -> List[Dict]:
-    """Получает список любимых фильмов с деталями"""
+def get_favorite_movies(user_id: int, limit: int = 20) -> List[Dict]:
+    """Получает список любимых фильмов"""
     conn = db.get_opinions_db_connection()
     cursor = conn.cursor()
     cursor.execute('''
-        SELECT fm.movie_id, fm.added_at, fm.user_rating, fm.review,
-               m.name, m.year, m.rating
+        SELECT fm.movie_id, fm.added_at, m.name, m.year, m.rating
         FROM favorite_movies fm
         JOIN movies m ON fm.movie_id = m.id
         WHERE fm.user_id = ?
         ORDER BY fm.added_at DESC
-        LIMIT ? OFFSET ?
-    ''', (user_id, limit, offset))
+        LIMIT ?
+    ''', (user_id, limit))
     rows = cursor.fetchall()
     conn.close()
-    
-    result = []
-    for row in rows:
-        result.append({
-            'movie_id': row[0],
-            'added_at': row[1],
-            'user_rating': row[2],
-            'review': row[3],
-            'name': row[4],
-            'year': row[5],
-            'rating': row[6]
-        })
-    return result
+    return [
+        {'movie_id': row[0], 'added_at': row[1], 'name': row[2], 'year': row[3], 'rating': row[4]}
+        for row in rows
+    ]
 
-def get_favorite_movies_count(user_id: int) -> int:
-    """Количество любимых фильмов"""
-    conn = db.get_opinions_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT COUNT(*) FROM favorite_movies WHERE user_id = ?
-    ''', (user_id,))
-    count = cursor.fetchone()[0]
-    conn.close()
-    return count
-
-def get_favorite_ids(user_id: int) -> List[int]:
-    """Получает только ID любимых фильмов"""
+def get_favorite_movie_ids(user_id: int) -> List[int]:
+    """Получает список ID любимых фильмов"""
     conn = db.get_opinions_db_connection()
     cursor = conn.cursor()
     cursor.execute('''
         SELECT movie_id FROM favorite_movies WHERE user_id = ?
     ''', (user_id,))
-    rows = cursor.fetchall()
+    ids = [row[0] for row in cursor.fetchall()]
     conn.close()
-    return [row[0] for row in rows]
+    return ids
 
 
-# ==================== СПИСОК "БУДУ СМОТРЕТЬ" ====================
+# ---- БУДУ СМОТРЕТЬ ----
 
 def add_to_watchlist(user_id: int, movie_id: int, status: str = 'planned') -> bool:
     """Добавляет фильм в список 'Буду смотреть'"""
-    movie = movie_module.get_movie_details(movie_id)
-    if not movie:
-        logger.warning(f"Фильм {movie_id} не найден в БД")
-        return False
-    
     conn = db.get_opinions_db_connection()
     cursor = conn.cursor()
     try:
         cursor.execute('''
-            INSERT OR REPLACE INTO watchlist (user_id, movie_id, added_at, status)
+            INSERT OR IGNORE INTO watchlist (user_id, movie_id, added_at, status)
             VALUES (?, ?, ?, ?)
         ''', (user_id, movie_id, datetime.now().isoformat(), status))
         conn.commit()
-        return True
+        return cursor.rowcount > 0
     except Exception as e:
         logger.error(f"Ошибка добавления в watchlist: {e}")
         return False
@@ -345,97 +289,53 @@ def is_in_watchlist(user_id: int, movie_id: int) -> bool:
     conn = db.get_opinions_db_connection()
     cursor = conn.cursor()
     cursor.execute('''
-        SELECT 1 FROM watchlist 
-        WHERE user_id = ? AND movie_id = ?
+        SELECT 1 FROM watchlist WHERE user_id = ? AND movie_id = ?
     ''', (user_id, movie_id))
     result = cursor.fetchone()
     conn.close()
     return result is not None
 
-def get_watchlist(user_id: int, limit: int = 20, offset: int = 0) -> List[Dict]:
-    """Получает список 'Буду смотреть' с деталями"""
+def get_watchlist(user_id: int, limit: int = 20) -> List[Dict]:
+    """Получает список 'Буду смотреть'"""
     conn = db.get_opinions_db_connection()
     cursor = conn.cursor()
     cursor.execute('''
-        SELECT w.movie_id, w.added_at, w.status,
-               m.name, m.year, m.rating
+        SELECT w.movie_id, w.added_at, w.status, m.name, m.year, m.rating
         FROM watchlist w
         JOIN movies m ON w.movie_id = m.id
         WHERE w.user_id = ?
         ORDER BY w.added_at DESC
-        LIMIT ? OFFSET ?
-    ''', (user_id, limit, offset))
+        LIMIT ?
+    ''', (user_id, limit))
     rows = cursor.fetchall()
     conn.close()
-    
-    status_labels = {
-        'planned': '📌 Запланировано',
-        'watching': '▶️ Смотрю',
-        'watched': '✅ Посмотрено'
-    }
-    
-    result = []
-    for row in rows:
-        result.append({
-            'movie_id': row[0],
-            'added_at': row[1],
-            'status': row[2],
-            'status_label': status_labels.get(row[2], row[2]),
-            'name': row[3],
-            'year': row[4],
-            'rating': row[5]
-        })
-    return result
-
-def get_watchlist_count(user_id: int) -> int:
-    """Количество фильмов в списке 'Буду смотреть'"""
-    conn = db.get_opinions_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT COUNT(*) FROM watchlist WHERE user_id = ?
-    ''', (user_id,))
-    count = cursor.fetchone()[0]
-    conn.close()
-    return count
-
-def get_watchlist_ids(user_id: int) -> List[int]:
-    """Получает только ID фильмов из списка 'Буду смотреть'"""
-    conn = db.get_opinions_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT movie_id FROM watchlist WHERE user_id = ?
-    ''', (user_id,))
-    rows = cursor.fetchall()
-    conn.close()
-    return [row[0] for row in rows]
+    return [
+        {'movie_id': row[0], 'added_at': row[1], 'status': row[2], 'name': row[3], 'year': row[4], 'rating': row[5]}
+        for row in rows
+    ]
 
 
-# ==================== "НЕ ПОНРАВИЛОСЬ" ====================
+# ---- НЕ ПОНРАВИЛИСЬ ----
 
-def add_disliked_movie(user_id: int, movie_id: int, reason: str = '') -> bool:
-    """Добавляет фильм в список 'Не понравилось'"""
-    movie = movie_module.get_movie_details(movie_id)
-    if not movie:
-        logger.warning(f"Фильм {movie_id} не найден в БД")
-        return False
-    
+def add_disliked_movie(user_id: int, movie_id: int, reason: str = None) -> bool:
+    """Добавляет фильм в список 'Не понравились'"""
     conn = db.get_opinions_db_connection()
     cursor = conn.cursor()
     try:
         cursor.execute('''
-            INSERT OR REPLACE INTO disliked_movies (user_id, movie_id, added_at, reason)
+            INSERT OR IGNORE INTO disliked_movies (user_id, movie_id, added_at, reason)
             VALUES (?, ?, ?, ?)
         ''', (user_id, movie_id, datetime.now().isoformat(), reason))
         conn.commit()
-        return True
+        return cursor.rowcount > 0
     except Exception as e:
-        logger.error(f"Ошибка добавления в 'Не понравилось': {e}")
+        logger.error(f"Ошибка добавления в disliked: {e}")
         return False
     finally:
         conn.close()
 
 def remove_disliked_movie(user_id: int, movie_id: int) -> bool:
-    """Удаляет фильм из списка 'Не понравилось'"""
+    """Удаляет фильм из списка 'Не понравились'"""
     conn = db.get_opinions_db_connection()
     cursor = conn.cursor()
     try:
@@ -445,106 +345,67 @@ def remove_disliked_movie(user_id: int, movie_id: int) -> bool:
         conn.commit()
         return cursor.rowcount > 0
     except Exception as e:
-        logger.error(f"Ошибка удаления из 'Не понравилось': {e}")
+        logger.error(f"Ошибка удаления из disliked: {e}")
         return False
     finally:
         conn.close()
 
 def is_disliked(user_id: int, movie_id: int) -> bool:
-    """Проверяет, есть ли фильм в списке 'Не понравилось'"""
+    """Проверяет, есть ли фильм в списке 'Не понравились'"""
     conn = db.get_opinions_db_connection()
     cursor = conn.cursor()
     cursor.execute('''
-        SELECT 1 FROM disliked_movies 
-        WHERE user_id = ? AND movie_id = ?
+        SELECT 1 FROM disliked_movies WHERE user_id = ? AND movie_id = ?
     ''', (user_id, movie_id))
     result = cursor.fetchone()
     conn.close()
     return result is not None
 
-def get_disliked_movies(user_id: int, limit: int = 20, offset: int = 0) -> List[Dict]:
-    """Получает список 'Не понравилось' с деталями"""
-    conn = db.get_opinions_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT d.movie_id, d.added_at, d.reason,
-               m.name, m.year, m.rating
-        FROM disliked_movies d
-        JOIN movies m ON d.movie_id = m.id
-        WHERE d.user_id = ?
-        ORDER BY d.added_at DESC
-        LIMIT ? OFFSET ?
-    ''', (user_id, limit, offset))
-    rows = cursor.fetchall()
-    conn.close()
-    
-    result = []
-    for row in rows:
-        result.append({
-            'movie_id': row[0],
-            'added_at': row[1],
-            'reason': row[2],
-            'name': row[3],
-            'year': row[4],
-            'rating': row[5]
-        })
-    return result
-
-def get_disliked_count(user_id: int) -> int:
-    """Количество фильмов в списке 'Не понравилось'"""
-    conn = db.get_opinions_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT COUNT(*) FROM disliked_movies WHERE user_id = ?
-    ''', (user_id,))
-    count = cursor.fetchone()[0]
-    conn.close()
-    return count
-
-def get_disliked_ids(user_id: int) -> List[int]:
-    """Получает только ID фильмов из списка 'Не понравилось' (для исключения)"""
+def get_disliked_movie_ids(user_id: int) -> List[int]:
+    """Получает список ID фильмов, которые не понравились"""
     conn = db.get_opinions_db_connection()
     cursor = conn.cursor()
     cursor.execute('''
         SELECT movie_id FROM disliked_movies WHERE user_id = ?
     ''', (user_id,))
-    rows = cursor.fetchall()
+    ids = [row[0] for row in cursor.fetchall()]
     conn.close()
-    return [row[0] for row in rows]
+    return ids
 
 
-# ==================== ПРЕДПОЧТЕНИЯ ПОЛЬЗОВАТЕЛЯ ====================
+# ==================== АНАЛИТИКА ДЛЯ КИНОПРОФИЛЯ ====================
 
-def get_user_preferences(user_id: int) -> Dict:
-    """
-    Собирает предпочтения пользователя для персонализации
-    """
-    prefs = {
-        'favorite_genres': [],
-        'favorite_actors': [],
-        'favorite_directors': [],
-        'favorite_movies': [],
-        'watchlist_movies': [],
-        'disliked_movies': []
-    }
+def get_user_cinema_stats(user_id: int) -> Dict:
+    """Собирает статистику для кинопрофиля"""
+    stats = get_user_stats(user_id, date.today().isoformat())
+    favorites = get_favorite_movies(user_id, limit=20)
+    history = get_user_query_history(user_id, limit=50)
     
-    # 1. Любимые жанры (из любимых фильмов)
+    return {
+        'total_queries': len(history),
+        'favorites_count': len(favorites),
+        'agent_queries': stats.get('agent_query_count', 0),
+        'opinions_count': stats.get('opinion_count', 0)
+    }
+
+def analyze_user_genres(user_id: int) -> List[Tuple[str, int]]:
+    """Анализирует жанры из любимых фильмов"""
     favorites = get_favorite_movies(user_id, limit=20)
     genre_count = {}
+    
     for fav in favorites:
         movie = movie_module.get_movie_details(fav['movie_id'])
         if movie:
             for genre in movie.get('genres', []):
-                if genre:
-                    genre_count[genre] = genre_count.get(genre, 0) + 1
+                genre_count[genre] = genre_count.get(genre, 0) + 1
     
-    if genre_count:
-        sorted_genres = sorted(genre_count.items(), key=lambda x: -x[1])
-        prefs['favorite_genres'] = [g for g, _ in sorted_genres[:3] if g]
-    
-    # 2. Любимые актёры и режиссёры
+    return sorted(genre_count.items(), key=lambda x: -x[1])[:5]
+
+def analyze_user_actors(user_id: int) -> List[Tuple[str, int]]:
+    """Анализирует актёров из любимых фильмов"""
+    favorites = get_favorite_movies(user_id, limit=20)
     actor_count = {}
-    director_count = {}
+    
     for fav in favorites:
         movie = movie_module.get_movie_details(fav['movie_id'])
         if movie:
@@ -552,73 +413,55 @@ def get_user_preferences(user_id: int) -> Dict:
                 name = actor.get('name') or actor.get('enName')
                 if name:
                     actor_count[name] = actor_count.get(name, 0) + 1
+    
+    return sorted(actor_count.items(), key=lambda x: -x[1])[:5]
+
+def analyze_user_directors(user_id: int) -> List[Tuple[str, int]]:
+    """Анализирует режиссёров из любимых фильмов"""
+    favorites = get_favorite_movies(user_id, limit=20)
+    director_count = {}
+    
+    for fav in favorites:
+        movie = movie_module.get_movie_details(fav['movie_id'])
+        if movie:
             for director in movie.get('directors', []):
                 name = director.get('name') or director.get('enName')
                 if name:
                     director_count[name] = director_count.get(name, 0) + 1
     
-    if actor_count:
-        sorted_actors = sorted(actor_count.items(), key=lambda x: -x[1])
-        prefs['favorite_actors'] = [a for a, _ in sorted_actors[:3] if a]
-    
-    if director_count:
-        sorted_directors = sorted(director_count.items(), key=lambda x: -x[1])
-        prefs['favorite_directors'] = [d for d, _ in sorted_directors[:3] if d]
-    
-    # 3. Любимые фильмы (первые 5)
-    for fav in favorites[:5]:
-        movie = movie_module.get_movie_details(fav['movie_id'])
-        if movie:
-            prefs['favorite_movies'].append({
-                'id': fav['movie_id'],
-                'name': movie.get('name', ''),
-                'year': movie.get('year', '')
-            })
-    
-    # 4. Список "Буду смотреть"
-    prefs['watchlist_movies'] = get_watchlist_ids(user_id)
-    
-    # 5. Список "Не понравилось"
-    prefs['disliked_movies'] = get_disliked_ids(user_id)
-    
-    return prefs
+    return sorted(director_count.items(), key=lambda x: -x[1])[:5]
 
-
-def format_preferences_text(preferences: Dict) -> str:
-    """
-    Форматирует предпочтения в текст для промпта
-    """
-    if not preferences:
-        return ""
+def get_user_achievements(user_id: int, genres: List[Tuple], stats: Dict) -> List[str]:
+    """Формирует список достижений пользователя"""
+    achievements = []
     
-    lines = []
-    lines.append("\n\n📌 УЧИЫВАЙ ПРЕДПОЧТЕНИЯ ПОЛЬЗОВАТЕЛЯ:")
+    # По количеству любимых фильмов
+    fav_count = stats.get('favorites_count', 0)
+    if fav_count >= 20:
+        achievements.append("🏅 КиноКоллекционер — 20+ любимых фильмов")
+    elif fav_count >= 10:
+        achievements.append("🏅 КиноМан — 10+ любимых фильмов")
+    elif fav_count >= 5:
+        achievements.append("🏅 КиноЛюбитель — 5+ любимых фильмов")
     
-    if preferences.get('favorite_genres'):
-        lines.append(f"• Любимые жанры: {', '.join(preferences['favorite_genres'])}")
+    # По количеству запросов
+    total_queries = stats.get('total_queries', 0)
+    if total_queries >= 100:
+        achievements.append("🏅 КиноГуру — 100+ запросов")
+    elif total_queries >= 50:
+        achievements.append("🏅 КиноЭксперт — 50+ запросов")
+    elif total_queries >= 20:
+        achievements.append("🏅 КиноИскатель — 20+ запросов")
     
-    if preferences.get('favorite_actors'):
-        lines.append(f"• Любимые актёры: {', '.join(preferences['favorite_actors'])}")
+    # По жанрам
+    genre_names = [g[0] for g in genres[:3]]
+    if 'драма' in genre_names:
+        achievements.append("🏅 КиноГурман — любишь драмы")
+    if any(g in genre_names for g in ['фантастика', 'фэнтези']):
+        achievements.append("🏅 Звездочёт — любишь фантастику")
+    if 'комедия' in genre_names:
+        achievements.append("🏅 КиноКлоун — любишь комедии")
+    if any(g in genre_names for g in ['ужасы', 'триллер']):
+        achievements.append("🏅 КиноСмельчак — любишь ужасы и триллеры")
     
-    if preferences.get('favorite_directors'):
-        lines.append(f"• Любимые режиссёры: {', '.join(preferences['favorite_directors'])}")
-    
-    if preferences.get('favorite_movies'):
-        fav_movies = []
-        for m in preferences['favorite_movies'][:3]:
-            name = m.get('name', '')
-            year = m.get('year', '')
-            fav_movies.append(f"{name} ({year})" if year else name)
-        if fav_movies:
-            lines.append(f"• Любимые фильмы: {', '.join(fav_movies)}")
-    
-    if preferences.get('watchlist_movies'):
-        lines.append(f"• В списке «Буду смотреть»: {len(preferences['watchlist_movies'])} фильмов")
-    
-    if preferences.get('disliked_movies'):
-        lines.append(f"• 🚫 НЕ ПРЕДЛАГАЙ фильмы с этими ID: {preferences['disliked_movies']}")
-        lines.append("  Эти фильмы пользователю НЕ понравились. Исключи их из рекомендаций полностью!")
-    
-    lines.append("\nСтарайся учитывать эти предпочтения при подборе фильмов. Если пользователь любит определённые жанры или актёров — предлагай похожее. Если есть фильмы, которые не понравились — исключи их и старайся предлагать противоположные по стилю.")
-    
-    return '\n'.join(lines)
+    return achievements
