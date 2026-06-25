@@ -182,6 +182,7 @@ def init_db():
     
     conn.commit()
     conn.close()
+    migrate_db()
     logger.info("✅ База данных инициализирована")
 
 # Вызываем при первом запуске
