@@ -197,11 +197,12 @@ def record_user_opinion(user_id: int, movie_id: int, opinion_text: str = '') -> 
 # ==================== ЛЮБИМЫЕ ФИЛЬМЫ ====================
 
 def add_favorite_movie(user_id: int, movie_id: int, rating: int = 0, review: str = '') -> bool:
-    # Проверяем, есть ли фильм в БД (ВРЕМЕННО ОТКЛЮЧЕНО)
-    # movie = movie_module.get_movie_details(movie_id)
-    # if not movie:
-    #     logger.warning(f"Фильм {movie_id} не найден в БД")
-    #     return False
+    """Добавляет фильм в любимые"""
+    # Проверяем, есть ли фильм в БД
+    movie = movie_module.get_movie_details(movie_id)
+    if not movie:
+        logger.warning(f"Фильм {movie_id} не найден в БД")
+        return False
     
     conn = db.get_opinions_db_connection()
     cursor = conn.cursor()
@@ -237,11 +238,6 @@ def remove_favorite_movie(user_id: int, movie_id: int) -> bool:
 
 def is_favorite(user_id: int, movie_id: int) -> bool:
     """Проверяет, есть ли фильм в любимых"""
-    # Защита от неправильных типов
-    if not isinstance(user_id, int) or not isinstance(movie_id, int):
-        logger.warning(f"Некорректные типы: user_id={user_id} (тип: {type(user_id)}), movie_id={movie_id}")
-        return False
-    
     conn = db.get_opinions_db_connection()
     cursor = conn.cursor()
     cursor.execute('''
@@ -307,10 +303,11 @@ def get_favorite_ids(user_id: int) -> List[int]:
 # ==================== СПИСОК "БУДУ СМОТРЕТЬ" ====================
 
 def add_to_watchlist(user_id: int, movie_id: int, status: str = 'planned') -> bool:
-    # movie = movie_module.get_movie_details(movie_id)
-    # if not movie:
-    #     logger.warning(f"Фильм {movie_id} не найден в БД")
-    #     return False
+    """Добавляет фильм в список 'Буду смотреть'"""
+    movie = movie_module.get_movie_details(movie_id)
+    if not movie:
+        logger.warning(f"Фильм {movie_id} не найден в БД")
+        return False
     
     conn = db.get_opinions_db_connection()
     cursor = conn.cursor()
@@ -345,10 +342,6 @@ def remove_from_watchlist(user_id: int, movie_id: int) -> bool:
 
 def is_in_watchlist(user_id: int, movie_id: int) -> bool:
     """Проверяет, есть ли фильм в списке 'Буду смотреть'"""
-    if not isinstance(user_id, int) or not isinstance(movie_id, int):
-        logger.warning(f"Некорректные типы: user_id={user_id}, movie_id={movie_id}")
-        return False
-    
     conn = db.get_opinions_db_connection()
     cursor = conn.cursor()
     cursor.execute('''
@@ -420,10 +413,11 @@ def get_watchlist_ids(user_id: int) -> List[int]:
 # ==================== "НЕ ПОНРАВИЛОСЬ" ====================
 
 def add_disliked_movie(user_id: int, movie_id: int, reason: str = '') -> bool:
-    # movie = movie_module.get_movie_details(movie_id)
-    # if not movie:
-    #     logger.warning(f"Фильм {movie_id} не найден в БД")
-    #     return False
+    """Добавляет фильм в список 'Не понравилось'"""
+    movie = movie_module.get_movie_details(movie_id)
+    if not movie:
+        logger.warning(f"Фильм {movie_id} не найден в БД")
+        return False
     
     conn = db.get_opinions_db_connection()
     cursor = conn.cursor()
@@ -458,10 +452,6 @@ def remove_disliked_movie(user_id: int, movie_id: int) -> bool:
 
 def is_disliked(user_id: int, movie_id: int) -> bool:
     """Проверяет, есть ли фильм в списке 'Не понравилось'"""
-    if not isinstance(user_id, int) or not isinstance(movie_id, int):
-        logger.warning(f"Некорректные типы: user_id={user_id}, movie_id={movie_id}")
-        return False
-    
     conn = db.get_opinions_db_connection()
     cursor = conn.cursor()
     cursor.execute('''
@@ -523,21 +513,19 @@ def get_disliked_ids(user_id: int) -> List[int]:
     return [row[0] for row in rows]
 
 
-# core/user.py — ДОБАВЛЯЕМ В КОНЕЦ ФАЙЛА
-
 # ==================== ПРЕДПОЧТЕНИЯ ПОЛЬЗОВАТЕЛЯ ====================
 
 def get_user_preferences(user_id: int) -> Dict:
     """
     Собирает предпочтения пользователя для персонализации
-    Возвращает словарь с любимыми жанрами, актёрами, режиссёрами
     """
     prefs = {
         'favorite_genres': [],
         'favorite_actors': [],
         'favorite_directors': [],
         'favorite_movies': [],
-        'watchlist_movies': []
+        'watchlist_movies': [],
+        'disliked_movies': []
     }
     
     # 1. Любимые жанры (из любимых фильмов)
@@ -550,23 +538,20 @@ def get_user_preferences(user_id: int) -> Dict:
                 if genre:
                     genre_count[genre] = genre_count.get(genre, 0) + 1
     
-    # Топ-3 жанра
     if genre_count:
         sorted_genres = sorted(genre_count.items(), key=lambda x: -x[1])
         prefs['favorite_genres'] = [g for g, _ in sorted_genres[:3] if g]
     
-    # 2. Любимые актёры и режиссёры (из любимых фильмов)
+    # 2. Любимые актёры и режиссёры
     actor_count = {}
     director_count = {}
     for fav in favorites:
         movie = movie_module.get_movie_details(fav['movie_id'])
         if movie:
-            # Актёры
             for actor in movie.get('actors', [])[:5]:
                 name = actor.get('name') or actor.get('enName')
                 if name:
                     actor_count[name] = actor_count.get(name, 0) + 1
-            # Режиссёры
             for director in movie.get('directors', []):
                 name = director.get('name') or director.get('enName')
                 if name:
@@ -580,8 +565,7 @@ def get_user_preferences(user_id: int) -> Dict:
         sorted_directors = sorted(director_count.items(), key=lambda x: -x[1])
         prefs['favorite_directors'] = [d for d, _ in sorted_directors[:3] if d]
     
-    # 3. Любимые фильмы (ID и названия)
-    prefs['favorite_movies'] = []
+    # 3. Любимые фильмы (первые 5)
     for fav in favorites[:5]:
         movie = movie_module.get_movie_details(fav['movie_id'])
         if movie:
@@ -591,13 +575,11 @@ def get_user_preferences(user_id: int) -> Dict:
                 'year': movie.get('year', '')
             })
     
-    # 4. Список "Буду смотреть" (если таблица уже есть)
-    try:
-        watchlist = get_watchlist(user_id, limit=10)
-        prefs['watchlist_movies'] = [item['movie_id'] for item in watchlist]
-    except Exception:
-        # Таблицы ещё нет — просто пропускаем
-        pass
+    # 4. Список "Буду смотреть"
+    prefs['watchlist_movies'] = get_watchlist_ids(user_id)
+    
+    # 5. Список "Не понравилось"
+    prefs['disliked_movies'] = get_disliked_ids(user_id)
     
     return prefs
 
@@ -633,6 +615,10 @@ def format_preferences_text(preferences: Dict) -> str:
     if preferences.get('watchlist_movies'):
         lines.append(f"• В списке «Буду смотреть»: {len(preferences['watchlist_movies'])} фильмов")
     
-    lines.append("\nСтарайся учитывать эти предпочтения при подборе фильмов, но не ограничивайся только ими — предлагай и новые варианты, которые могут понравиться пользователю.")
+    if preferences.get('disliked_movies'):
+        lines.append(f"• 🚫 НЕ ПРЕДЛАГАЙ фильмы с этими ID: {preferences['disliked_movies']}")
+        lines.append("  Эти фильмы пользователю НЕ понравились. Исключи их из рекомендаций полностью!")
     
-    return '\n'.join(lines)  
+    lines.append("\nСтарайся учитывать эти предпочтения при подборе фильмов. Если пользователь любит определённые жанры или актёров — предлагай похожее. Если есть фильмы, которые не понравились — исключи их и старайся предлагать противоположные по стилю.")
+    
+    return '\n'.join(lines)
