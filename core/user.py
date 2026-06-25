@@ -1,5 +1,4 @@
-# core/user.py — С ПОДДЕРЖКОЙ КИНОПРОФИЛЯ И СПИСКОВ
-
+# core/user.py
 import logging
 import sqlite3
 from datetime import datetime, date, timedelta
@@ -96,13 +95,11 @@ def increment_stat_counter(user_id: int, stat_type: str):
     conn = db.get_opinions_db_connection()
     cursor = conn.cursor()
     
-    # Создаём запись, если её нет
     cursor.execute('''
         INSERT OR IGNORE INTO user_stats (user_id, date, opinion_count, regeneration_count, agent_query_count)
         VALUES (?, ?, 0, 0, 0)
     ''', (user_id, today))
     
-    # Обновляем нужный счётчик
     if stat_type == 'opinion_count':
         cursor.execute('''
             UPDATE user_stats 
@@ -435,7 +432,6 @@ def get_user_achievements(user_id: int, genres: List[Tuple], stats: Dict) -> Lis
     """Формирует список достижений пользователя"""
     achievements = []
     
-    # По количеству любимых фильмов
     fav_count = stats.get('favorites_count', 0)
     if fav_count >= 20:
         achievements.append("🏅 КиноКоллекционер — 20+ любимых фильмов")
@@ -444,7 +440,6 @@ def get_user_achievements(user_id: int, genres: List[Tuple], stats: Dict) -> Lis
     elif fav_count >= 5:
         achievements.append("🏅 КиноЛюбитель — 5+ любимых фильмов")
     
-    # По количеству запросов
     total_queries = stats.get('total_queries', 0)
     if total_queries >= 100:
         achievements.append("🏅 КиноГуру — 100+ запросов")
@@ -453,7 +448,6 @@ def get_user_achievements(user_id: int, genres: List[Tuple], stats: Dict) -> Lis
     elif total_queries >= 20:
         achievements.append("🏅 КиноИскатель — 20+ запросов")
     
-    # По жанрам
     genre_names = [g[0] for g in genres[:3]]
     if 'драма' in genre_names:
         achievements.append("🏅 КиноГурман — любишь драмы")
@@ -465,3 +459,24 @@ def get_user_achievements(user_id: int, genres: List[Tuple], stats: Dict) -> Lis
         achievements.append("🏅 КиноСмельчак — любишь ужасы и триллеры")
     
     return achievements
+
+
+# ==================== ОБНОВЛЕНИЕ ТАРИФА ====================
+
+def update_user_tariff(user_id: int, tariff_name: str, duration_days: int = 30):
+    """Обновляет тариф пользователя"""
+    end_date = (datetime.now() + timedelta(days=duration_days)).isoformat()
+    conn = db.get_opinions_db_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute('''
+            UPDATE users 
+            SET tariff_name = ?, tariff_end_date = ?
+            WHERE user_id = ?
+        ''', (tariff_name, end_date, user_id))
+        conn.commit()
+        logger.info(f"✅ Тариф пользователя {user_id} обновлён на {tariff_name}")
+    except Exception as e:
+        logger.error(f"Ошибка обновления тарифа: {e}")
+    finally:
+        conn.close()
