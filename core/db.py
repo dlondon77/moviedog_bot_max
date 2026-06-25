@@ -1,124 +1,48 @@
 # core/db.py
 import sqlite3
-import os
 import logging
-from datetime import datetime
+import os
 
 logger = logging.getLogger(__name__)
 
+# ==================== ПУТИ К БАЗАМ ДАННЫХ ====================
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, 'data')
-DB_PATH = os.path.join(DATA_DIR, 'movies.db')
+MOVIES_DB_PATH = os.path.join(DATA_DIR, 'movies.db')
 OPINIONS_DB_PATH = os.path.join(DATA_DIR, 'opinions.db')
 
-# ==================== ИНИЦИАЛИЗАЦИЯ БАЗ ДАННЫХ ====================
-
+# ==================== ПОДКЛЮЧЕНИЕ К БАЗАМ ====================
 def get_movies_db_connection():
-    """Возвращает соединение с базой данных фильмов"""
-    if not os.path.exists(DATA_DIR):
-        os.makedirs(DATA_DIR)
-    conn = sqlite3.connect(DB_PATH)
+    """Подключение к базе фильмов"""
+    conn = sqlite3.connect(MOVIES_DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
 def get_opinions_db_connection():
-    """Возвращает соединение с базой данных мнений и пользователей"""
-    if not os.path.exists(DATA_DIR):
-        os.makedirs(DATA_DIR)
+    """Подключение к базе мнений и пользователей"""
     conn = sqlite3.connect(OPINIONS_DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
+# ==================== ОЧИСТКА ТЕКСТА ====================
+def clean_text(text: str, for_sql: bool = False) -> str:
+    """Очищает текст от лишних символов"""
+    if not text:
+        return ""
+    
+    # Удаляем лишние пробелы
+    text = ' '.join(text.split())
+    
+    # Для SQL-запросов экранируем кавычки
+    if for_sql:
+        text = text.replace("'", "''")
+        text = text.replace('"', '""')
+    
+    return text
+
+# ==================== ИНИЦИАЛИЗАЦИЯ ТАБЛИЦ ====================
 def init_db():
-    """Инициализирует все таблицы баз данных"""
-    # База данных фильмов
-    conn = get_movies_db_connection()
-    cursor = conn.cursor()
-    
-    # Таблица фильмов
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS movies (
-            id INTEGER PRIMARY KEY,
-            name TEXT,
-            en_name TEXT,
-            year INTEGER,
-            rating REAL,
-            description TEXT,
-            movie_type TEXT,
-            poster_url TEXT,
-            is_new_release INTEGER DEFAULT 0,
-            premiere_russia TEXT,
-            premiere_world TEXT,
-            await_count INTEGER DEFAULT 0,
-            created_at TEXT,
-            updated_at TEXT
-        )
-    ''')
-    
-    # Таблица жанров
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS genres (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            movie_id INTEGER,
-            genre TEXT,
-            FOREIGN KEY (movie_id) REFERENCES movies(id)
-        )
-    ''')
-    
-    # Таблица стран
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS countries (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            movie_id INTEGER,
-            country TEXT,
-            FOREIGN KEY (movie_id) REFERENCES movies(id)
-        )
-    ''')
-    
-    # Таблица актёров
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS actors (
-            id INTEGER PRIMARY KEY,
-            name TEXT,
-            enName TEXT,
-            photo TEXT
-        )
-    ''')
-    
-    # Таблица связи фильмов и актёров
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS movie_actors (
-            movie_id INTEGER,
-            actor_id INTEGER,
-            FOREIGN KEY (movie_id) REFERENCES movies(id),
-            FOREIGN KEY (actor_id) REFERENCES actors(id)
-        )
-    ''')
-    
-    # Таблица режиссёров
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS directors (
-            id INTEGER PRIMARY KEY,
-            name TEXT,
-            enName TEXT,
-            photo TEXT
-        )
-    ''')
-    
-    # Таблица связи фильмов и режиссёров
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS movie_directors (
-            movie_id INTEGER,
-            director_id INTEGER,
-            FOREIGN KEY (movie_id) REFERENCES movies(id),
-            FOREIGN KEY (director_id) REFERENCES directors(id)
-        )
-    ''')
-    
-    conn.commit()
-    conn.close()
-    
-    # База данных мнений и пользователей
+    """Создаёт все необходимые таблицы при первом запуске"""
     conn = get_opinions_db_connection()
     cursor = conn.cursor()
     
@@ -131,25 +55,24 @@ def init_db():
             last_name TEXT,
             platform TEXT,
             tariff_name TEXT DEFAULT 'Щенячий азарт',
-            tariff_end_date TEXT,
-            registered_at TEXT
+            tariff_end_date TEXT DEFAULT 'бессрочно',
+            created_at TEXT
         )
     ''')
     
-    # Таблица статистики пользователей
+    # Таблица статистики пользователей (по дням)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS user_stats (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER,
-            stat_date TEXT,
+            date TEXT,
             opinion_count INTEGER DEFAULT 0,
             regeneration_count INTEGER DEFAULT 0,
-            agent_count INTEGER DEFAULT 0,
-            UNIQUE(user_id, stat_date)
+            agent_query_count INTEGER DEFAULT 0,
+            PRIMARY KEY (user_id, date)
         )
     ''')
     
-    # Таблица мнений о фильмах
+    # Таблица мнений о фильмах (кэш)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS movie_opinions (
             movie_id INTEGER PRIMARY KEY,
@@ -168,114 +91,81 @@ def init_db():
             movie_id INTEGER,
             message TEXT,
             status TEXT DEFAULT 'new',
-            admin_comment TEXT DEFAULT '',
+            admin_comment TEXT,
+            created_at TEXT
+        )
+    ''')
+    
+    # Таблица истории мнений пользователя
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS user_opinions (
+            user_id INTEGER,
+            movie_id INTEGER,
             created_at TEXT,
+            PRIMARY KEY (user_id, movie_id)
+        )
+    ''')
+    
+    # ---- НОВЫЕ ТАБЛИЦЫ ДЛЯ СПИСКОВ И КИНОПРОФИЛЯ ----
+    
+    # Любимые фильмы
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS favorite_movies (
+            user_id INTEGER,
+            movie_id INTEGER,
+            added_at TEXT,
+            PRIMARY KEY (user_id, movie_id)
+        )
+    ''')
+    
+    # Буду смотреть
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS watchlist (
+            user_id INTEGER,
+            movie_id INTEGER,
+            added_at TEXT,
+            status TEXT DEFAULT 'planned',
+            PRIMARY KEY (user_id, movie_id)
+        )
+    ''')
+    
+    # Не понравились
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS disliked_movies (
+            user_id INTEGER,
+            movie_id INTEGER,
+            added_at TEXT,
+            reason TEXT,
+            PRIMARY KEY (user_id, movie_id)
+        )
+    ''')
+    
+    # История запросов пользователя
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS user_query_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            query TEXT,
+            agent_mode TEXT,
+            created_at TEXT
+        )
+    ''')
+    
+    # Таблица для пользовательских предпочтений (для будущей персонализации)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS user_preferences (
+            user_id INTEGER PRIMARY KEY,
+            favorite_genres TEXT,
+            favorite_actors TEXT,
+            favorite_directors TEXT,
+            preferred_decades TEXT,
             updated_at TEXT
         )
     ''')
     
-    # Таблица мнений пользователей о фильмах (для истории)
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS user_movie_opinions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            movie_id INTEGER,
-            opinion_text TEXT,
-            created_at TEXT,
-            UNIQUE(user_id, movie_id)
-        )
-    ''')
-    
-    # ==================== НОВЫЕ ТАБЛИЦЫ ====================
-    
-    def init_cinema_tables():
-        """Создаёт таблицы для кинопрофиля и списков"""
-        conn = get_opinions_db_connection()
-        cursor = conn.cursor()
-        
-        # Любимые фильмы (если ещё нет)
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS favorite_movies (
-                user_id INTEGER,
-                movie_id INTEGER,
-                added_at TEXT,
-                PRIMARY KEY (user_id, movie_id)
-            )
-        ''')
-        
-        # Буду смотреть
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS watchlist (
-                user_id INTEGER,
-                movie_id INTEGER,
-                added_at TEXT,
-                status TEXT DEFAULT 'planned',  -- planned, watching
-                PRIMARY KEY (user_id, movie_id)
-            )
-        ''')
-        
-        # НЕ ПОНРАВИЛИСЬ
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS disliked_movies (
-                user_id INTEGER,
-                movie_id INTEGER,
-                added_at TEXT,
-                reason TEXT,
-                PRIMARY KEY (user_id, movie_id)
-            )
-        ''')
-        
-        # История запросов (для статистики)
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS user_query_history (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                query TEXT,
-                agent_mode TEXT,
-                created_at TEXT
-            )
-        ''')
-        
-        conn.commit()
-        conn.close()
-        logger.info("✅ Таблицы для кинопрофиля созданы")
+    conn.commit()
+    conn.close()
+    logger.info("✅ База данных инициализирована")
 
-# ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
-
-def clean_text(text: str, for_sql: bool = False) -> str:
-    """Очищает текст от специальных символов"""
-    if not text:
-        return ''
-    import re
-    text = re.sub(r'[^\w\s\-()\'"]', ' ', text)
-    text = ' '.join(text.split())
-    if for_sql:
-        text = text.replace("'", "''")
-    return text
-
-def get_db_version() -> str:
-    """Возвращает версию базы данных"""
-    conn = get_opinions_db_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.execute("SELECT sqlite_version()")
-        version = cursor.fetchone()[0]
-        conn.close()
-        return version
-    except Exception as e:
-        logger.error(f"Ошибка получения версии БД: {e}")
-        return "unknown"
-
-def backup_db() -> bool:
-    """Создаёт резервную копию базы данных"""
-    try:
-        import shutil
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        backup_path = f"{DB_PATH}.backup_{timestamp}"
-        if os.path.exists(DB_PATH):
-            shutil.copy2(DB_PATH, backup_path)
-            logger.info(f"📦 Резервная копия создана: {backup_path}")
-        return True
-    except Exception as e:
-        logger.error(f"Ошибка создания резервной копии: {e}")
-        return False
+# Вызываем при первом запуске
+init_db()
