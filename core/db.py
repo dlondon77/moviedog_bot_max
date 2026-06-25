@@ -40,6 +40,23 @@ def clean_text(text: str, for_sql: bool = False) -> str:
     
     return text
 
+def migrate_db():
+    """Обновляет схему базы данных до актуальной версии"""
+    conn = get_opinions_db_connection()
+    cursor = conn.cursor()
+    
+    # Проверяем, есть ли колонка agent_query_count
+    cursor.execute("PRAGMA table_info(user_stats)")
+    columns = [col[1] for col in cursor.fetchall()]
+    
+    if 'agent_query_count' not in columns:
+        logger.info("🔄 Добавляем колонку agent_query_count в user_stats")
+        cursor.execute("ALTER TABLE user_stats ADD COLUMN agent_query_count INTEGER DEFAULT 0")
+        conn.commit()
+        logger.info("✅ Колонка agent_query_count добавлена")
+    
+    conn.close()
+
 # ==================== ИНИЦИАЛИЗАЦИЯ ТАБЛИЦ ====================
 def init_db():
     """Создаёт все необходимые таблицы при первом запуске"""
