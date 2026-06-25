@@ -1,9 +1,11 @@
-# core/max_adapter.py - С ПОДДЕРЖКОЙ КОНТЕКСТА И ЗАПРЕТОМ ПОВТОРА
-# + Сохранение ID показанных фильмов для запрета повтора
-# + Передача контекста в run_agent()
-# + Сброс контекста при новой подборке
+# core/max_adapter.py - С ПОДДЕРЖКОЙ КОНТЕКСТА, ЗАПРЕТОМ ПОВТОРА, ЛИМИТАМИ И ТАЙМАУТОМ
+# + Контекст диалога для всех режимов
+# + Запрет повтора фильмов при уточнении
 # + Карточки-заглушки для отсутствующих фильмов
 # + Улучшенный режим "Пообщаться" с кнопками
+# + 1 диалог = 1 лимит (уточнения бесплатно)
+# + Таймаут диалога 30 минут
+# + Лимит уточнений 3 на диалог
 
 import logging
 import configparser
@@ -31,6 +33,8 @@ import httpx
 
 # ==================== КОНСТАНТЫ ====================
 ADMIN_IDS = [7191208]  # Замените на свой ID
+DIALOG_TIMEOUT_MINUTES = 30  # Таймаут диалога в минутах
+MAX_REFINES_PER_DIALOG = 3   # Максимум уточнений на диалог
 logger.info(f"👑 Администраторы: {ADMIN_IDS}")
 
 # ==================== ИМПОРТЫ ИЗ CORE ====================
@@ -457,21 +461,33 @@ def _prepare_movies_with_placeholders(movie_ids: List[int], response: str = "") 
         movie_details = get_movie_details(movie_id)
         
         if movie_details:
+            # Проверяем, сериал ли это
+            is_series = movie_details.get('movie_type') in ['tv-series', 'mini-series']
             movies_list.append({
                 'id': movie_id,
                 'name': movie_details.get('name', f'Фильм {movie_id}'),
                 'year': movie_details.get('year', ''),
                 'details': movie_details,
-                'is_missing': False
+                'is_missing': False,
+                'is_series': is_series
             })
         else:
             name = _extract_movie_name_from_response(response, movie_id)
+            # Пытаемся определить, сериал ли это по наличию слова "сериал" в названии или по ссылке
+            is_series = False
+            if name and ('сериал' in name.lower() or 'series' in name.lower()):
+                is_series = True
+            # Проверяем ссылку на /series/
+            if re.search(rf'/series/{movie_id}/', response, re.IGNORECASE):
+                is_series = True
+            
             movies_list.append({
                 'id': movie_id,
                 'name': name or f'Фильм {movie_id}',
                 'year': '',
                 'details': None,
-                'is_missing': True
+                'is_missing': True,
+                'is_series': is_series
             })
     
     return movies_list
@@ -490,7 +506,7 @@ class MaxAdapter:
         self.user_context = {}
 
         self._register_handlers()
-        logger.info("✅ MaxAdapter инициализирован (с контекстом и запретом повтора)")
+        logger.info("✅ MaxAdapter инициализирован (с лимитами и таймаутом)")
 
     def _register_handlers(self):
         @self.dp.bot_started()
@@ -591,6 +607,98 @@ class MaxAdapter:
         context.pop('refined', None)
         context.pop('last_query', None)
         context.pop('refine_mode', None)
+        # Очистка полей диалога
+        context.pop('dialog_started', None)
+        context.pop('dialog_start_time', None)
+        context.pop('refine_count', None)
+
+    def _check_dialog_timeout(self, user_id: int) -> bool:
+        """
+        Проверяет, не истёк ли таймаут диалога.
+        Возвращает True, если диалог активен.
+        Если таймаут истёк — сбрасывает контекст и возвращает False.
+        """
+        context = self._get_user_context(user_id)
+        start_time = context.get('dialog_start_time')
+        
+        if not start_time:
+            return True  # Диалога нет — считаем активным
+        
+        elapsed = (datetime.now() - start_time).total_seconds() / 60
+        
+        if elapsed > DIALOG_TIMEOUT_MINUTES:
+            # Таймаут истёк — сбрасываем контекст
+            self._clear_agent_context(user_id)
+            context.pop('dialog_started', None)
+            context.pop('dialog_start_time', None)
+            context.pop('refine_count', None)
+            return False
+        
+        return True
+
+    def _can_start_new_dialog(self, user_id: int) -> bool:
+        """
+        Проверяет, может ли пользователь начать новый диалог.
+        Возвращает True, если лимит не превышен.
+        """
+        if user_id in ADMIN_IDS:
+            return True
+        
+        limits = get_user_limits(user_id)
+        stats = get_user_stats(user_id, date.today().isoformat())
+        
+        # Проверяем лимит по мнениям (он же используется для КиноЛогово)
+        if stats.get('opinion_count', 0) >= limits.get('opinion_limit', 5):
+            return False
+        
+        return True
+
+    def _start_dialog(self, user_id: int) -> bool:
+        """
+        Начинает новый диалог — списывает лимит и устанавливает время.
+        Возвращает True, если удалось начать.
+        """
+        if user_id in ADMIN_IDS:
+            # Админы — безлимит
+            context = self._get_user_context(user_id)
+            context['dialog_started'] = True
+            context['dialog_start_time'] = datetime.now()
+            context['refine_count'] = 0
+            return True
+        
+        # Проверяем лимит
+        limits = get_user_limits(user_id)
+        stats = get_user_stats(user_id, date.today().isoformat())
+        
+        if stats.get('opinion_count', 0) >= limits.get('opinion_limit', 5):
+            return False
+        
+        # Списываем лимит
+        increment_stat_counter(user_id, 'opinion_count')
+        
+        context = self._get_user_context(user_id)
+        context['dialog_started'] = True
+        context['dialog_start_time'] = datetime.now()
+        context['refine_count'] = 0
+        
+        return True
+
+    def _can_refine(self, user_id: int) -> bool:
+        """
+        Проверяет, можно ли сделать уточнение в текущем диалоге.
+        """
+        context = self._get_user_context(user_id)
+        refine_count = context.get('refine_count', 0)
+        
+        # Админы — безлимит
+        if user_id in ADMIN_IDS:
+            return True
+        
+        # Проверяем, не превышен ли лимит уточнений
+        if refine_count >= MAX_REFINES_PER_DIALOG:
+            return False
+        
+        return True
 
     def _apply_filters_to_movies(self, movies, filters):
         if not filters:
@@ -720,7 +828,8 @@ class MaxAdapter:
                 "🐾 <b>Актёрский нюх</b> — анализ ролей актёра или режиссёра\n"
                 "⭐ <b>Сравнить фильмы</b> — сравню два фильма и скажу, что лучше\n"
                 "🔎 <b>По сюжету</b> — найду фильмы по описанию\n\n"
-                "🐾 Чем подробнее опишешь, что ищешь — тем точнее будет результат!",
+                "🐾 Чем подробнее опишешь, что ищешь — тем точнее будет результат!\n\n"
+                "📊 <b>Лимиты:</b> 1 диалог = 1 лимит, 3 уточнения на диалог",
                 parse_mode="html",
                 attachments=[get_agent_menu()]
             )
@@ -1481,8 +1590,31 @@ class MaxAdapter:
     # ===== УТОЧНЕНИЕ ПОДБОРКИ =====
     async def _handle_refine(self, event, user_id, text):
         context = self._get_user_context(user_id)
+        
+        # Проверка таймаута
+        if not self._check_dialog_timeout(user_id):
+            await event.message.answer(
+                "🐾 Наш диалог длился больше 30 минут. Давай начнём новую подборку!",
+                attachments=[get_agent_menu()]
+            )
+            return
+        
+        # Проверка лимита уточнений
+        if not self._can_refine(user_id):
+            await event.message.answer(
+                f"🐾 Ты уже использовал {MAX_REFINES_PER_DIALOG} уточнений в этом диалоге.\n\n"
+                "Что делать?\n"
+                "• Начать новую подборку — кнопка «Ещё подобрать»\n"
+                "• Оформить подписку для безлимита — от 199 ₽/мес",
+                attachments=[get_agent_menu()]
+            )
+            return
+        
         mode = context.get('refine_mode', 'recommend')
         original_query = context.get('last_query', '')
+        
+        # Увеличиваем счётчик уточнений
+        context['refine_count'] = context.get('refine_count', 0) + 1
         
         # Получаем ID уже показанных фильмов
         exclude_ids = context.get('shown_movie_ids', [])
@@ -1493,7 +1625,6 @@ class MaxAdapter:
         await event.message.answer("🔄 Уточняю подборку с учётом твоих пожеланий... 🐾")
         
         try:
-            # Передаём exclude_ids в run_agent
             response = await run_agent(
                 refine_query, 
                 user_id, 
@@ -1504,25 +1635,30 @@ class MaxAdapter:
             )
             
             if not response or len(response) < 10:
-                raise Exception("Пустой ответ от агента")
+                await event.message.answer(
+                    "🐾 Хм... Я не смогла уточнить подборку. 🤔\n\n"
+                    "Попробуй:\n"
+                    "• Сформулировать уточнение проще\n"
+                    "• Начать новую подборку кнопкой «Ещё подобрать»\n"
+                    "• Выбрать другую функцию\n\n"
+                    "Я всегда готова помочь! 🐾",
+                    attachments=[get_agent_menu()]
+                )
+                return
             
             context['refined'] = True
             context['last_response'] = response
             
-            # Извлекаем новые ID
             movie_ids = extract_movie_ids(response)[:7]
             movies_list = _prepare_movies_with_placeholders(movie_ids, response)
             movies_list = movies_list[:5]
             
-            # Обновляем список показанных ID
             new_ids = [m['id'] for m in movies_list if not m['is_missing']]
             context['shown_movie_ids'] = exclude_ids + new_ids
             
-            # Считаем реальные фильмы
             real_movies = [m for m in movies_list if not m['is_missing']]
             missing_movies = [m for m in movies_list if m['is_missing']]
             
-            # Показываем сообщение только если есть и те, и другие
             if missing_movies and real_movies:
                 await event.message.answer(
                     f"🐾 Нашла {len(real_movies)} фильмов в своей базе, "
@@ -1534,14 +1670,12 @@ class MaxAdapter:
                     "🐾 Эти фильмы пока не загружены в мою базу, но я покажу ссылки на Кинопоиск!"
                 )
             
-            # Формируем кнопки (без уточнения)
             buttons = []
             if movies_list:
                 buttons.append([
                     {"type": "callback", "text": f"🎬 Показать карточки ({len(movies_list)})", "payload": "agent_show_cards"}
                 ])
             
-            # Кнопка "Ещё" в зависимости от режима
             mode_buttons = {
                 'recommend': ('🎬 Ещё подобрать', 'agent_recommend'),
                 'actor': ('🐾 Ещё актёрский нюх', 'agent_actor'),
@@ -1581,21 +1715,46 @@ class MaxAdapter:
         context = self._get_user_context(user_id)
         agent_mode = context.get('agent_mode', 'chat')
         
+        # Проверка таймаута
+        if not self._check_dialog_timeout(user_id):
+            await event.message.answer(
+                "🐾 Наш диалог длился больше 30 минут, и я сбросила контекст, чтобы не запутаться.\n\n"
+                "Давай начнём новую подборку! Напиши, что хочешь найти 🐾",
+                attachments=[get_agent_menu()]
+            )
+            return
+        
         # Сохраняем исходный запрос для уточнений
         context['last_query'] = query
         context['refined'] = False
         
-        # Проверка лимитов
-        if user_id not in ADMIN_IDS:
-            limits = get_user_limits(user_id)
-            stats = get_user_stats(user_id, date.today().isoformat())
-            if stats.get('opinion_count', 0) >= limits.get('opinion_limit', 5):
+        # Если диалог ещё не начат — пытаемся начать
+        if not context.get('dialog_started', False):
+            if not self._can_start_new_dialog(user_id):
+                limits = get_user_limits(user_id)
+                stats = get_user_stats(user_id, date.today().isoformat())
+                remaining = limits.get('opinion_limit', 5) - stats.get('opinion_count', 0)
                 await event.message.answer(
-                    f"🐾 Сегодня у тебя уже использовано {stats['opinion_count']} мнений.\n"
-                    f"КиноЛогово — платная фишка!\n\n"
-                    f"💰 Оформи подписку для безлимита!"
+                    f"🐾 Сегодня у тебя уже использовано {stats['opinion_count']} мнений из {limits['opinion_limit']}.\n"
+                    f"Осталось {remaining} диалогов в КиноЛогово.\n\n"
+                    f"💰 Хочешь больше? Оформи подписку от 199 ₽/мес!"
                 )
                 return
+            
+            # Начинаем новый диалог (списывает лимит)
+            if not self._start_dialog(user_id):
+                await event.message.answer(
+                    "🐾 Что-то пошло не так при начале диалога. Попробуй позже!"
+                )
+                return
+            
+            # Показываем сколько осталось
+            limits = get_user_limits(user_id)
+            stats = get_user_stats(user_id, date.today().isoformat())
+            remaining = limits.get('opinion_limit', 5) - stats.get('opinion_count', 0)
+            await event.message.answer(
+                f"🐾 Начинаем новый диалог! У тебя осталось {remaining} диалогов на сегодня."
+            )
 
         if not ai_client:
             await event.message.answer("😢 Генерация временно недоступна.")
@@ -1607,7 +1766,6 @@ class MaxAdapter:
             'actor': "🐾 Бегу по следам великой личности... 🔍",
             'plot_search': "🔎 Нюхаю сюжеты... Дай мне пару минут, я найду самые интересные варианты! 🐕",
             'compare': "⭐ Сравниваю фильмы... Сейчас разложу всё по полочкам! 🧐",
-            # chat — НЕ ДОБАВЛЯЕМ, чтобы не дублировать
         }
         
         if agent_mode in mode_messages:
@@ -1615,7 +1773,6 @@ class MaxAdapter:
 
         # ===== РЕЖИМ "ПООБЩАТЬСЯ" =====
         if agent_mode == 'chat':
-            # Если похоже на поиск
             if _is_search_intent(query):
                 buttons = [
                     [{"type": "callback", "text": "🔍 Поиск по названию", "payload": "search"}],
@@ -1631,7 +1788,6 @@ class MaxAdapter:
                 )
                 return
             
-            # Если похоже на подборку
             if _is_recommend_intent(query):
                 buttons = [
                     [{"type": "callback", "text": "🎬 Подобрать фильм", "payload": "agent_recommend"}],
@@ -1648,7 +1804,6 @@ class MaxAdapter:
                 )
                 return
             
-            # Обычный режим — короткий ответ
             thinking_msg = await event.message.answer("💬 Дай-ка подумаю... 🐾")
             
             async def delete_after_delay():
@@ -1682,10 +1837,8 @@ class MaxAdapter:
 
         # ===== ВСЕ РЕЖИМЫ КИНОЛОГОВО =====
         try:
-            # Получаем ID уже показанных фильмов (если есть)
             exclude_ids = context.get('shown_movie_ids', [])
             
-            # Вызываем агента с контекстом и запретом повтора
             response = await run_agent(
                 query, 
                 user_id, 
@@ -1695,24 +1848,32 @@ class MaxAdapter:
                 use_context=True
             )
             
+            if not response or len(response) < 10:
+                await event.message.answer(
+                    "🐾 Хм... Я не смогла найти подходящие фильмы по твоему запросу. 🤔\n\n"
+                    "Попробуй:\n"
+                    "• Уточнить запрос (жанр, настроение, год)\n"
+                    "• Написать по-другому\n"
+                    "• Выбрать другую функцию в КиноЛогово\n\n"
+                    "Я всегда готова помочь! 🐾",
+                    attachments=[get_agent_menu()]
+                )
+                return
+            
             if user_id not in ADMIN_IDS:
                 increment_stat_counter(user_id, 'opinion_count')
             
-            # Извлекаем ID из ссылок
             movie_ids = extract_movie_ids(response)[:7]
             movies_list = _prepare_movies_with_placeholders(movie_ids, response)
             movies_list = movies_list[:5]
             
-            # Сохраняем ID показанных фильмов
             shown_ids = [m['id'] for m in movies_list if not m['is_missing']]
             context['shown_movie_ids'] = exclude_ids + shown_ids
             context['last_response'] = response
             
-            # Считаем реальные фильмы
             real_movies = [m for m in movies_list if not m['is_missing']]
             missing_movies = [m for m in movies_list if m['is_missing']]
             
-            # Показываем сообщение только если есть и те, и другие
             if missing_movies and real_movies:
                 await event.message.answer(
                     f"🐾 Нашла {len(real_movies)} фильмов в своей базе, "
@@ -1724,20 +1885,17 @@ class MaxAdapter:
                     "🐾 Эти фильмы пока не загружены в мою базу, но я покажу ссылки на Кинопоиск!"
                 )
             
-            # Формируем кнопки
             buttons = []
             if movies_list:
                 buttons.append([
                     {"type": "callback", "text": f"🎬 Показать карточки ({len(movies_list)})", "payload": "agent_show_cards"}
                 ])
             
-            # Кнопка уточнения — только если ещё не уточняли
             if not context.get('refined', False) and movies_list:
                 buttons.append([
                     {"type": "callback", "text": "🔄 Уточнить подборку", "payload": f"agent_refine_{agent_mode}"}
                 ])
             
-            # Кнопка "Ещё" в зависимости от режима
             mode_buttons = {
                 'recommend': ('🎬 Ещё подобрать', 'agent_recommend'),
                 'actor': ('🐾 Ещё актёрский нюх', 'agent_actor'),
@@ -1778,12 +1936,11 @@ class MaxAdapter:
         
         for movie_data in movies_list[:5]:
             if movie_data.get('is_missing'):
-                # Показываем заглушку
                 card = format_missing_movie_card(
                     movie_data['id'],
-                    movie_data.get('name')
+                    movie_data.get('name'),
+                    movie_data.get('is_series', False)
                 )
-                # Кнопка для поиска
                 buttons = [
                     [{"type": "callback", "text": "🔍 Поискать на других просторах", "payload": f"search_elsewhere_{movie_data['id']}"}],
                     [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}]
@@ -1791,7 +1948,6 @@ class MaxAdapter:
                 keyboard = InlineKeyboardMarkup(buttons)
                 await event.message.answer(card, parse_mode='html', attachments=[keyboard])
             else:
-                # Показываем нормальную карточку
                 card_text, _ = format_movie_card(movie_data['details'])
                 if card_text:
                     await event.message.answer(
