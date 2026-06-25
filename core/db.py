@@ -188,59 +188,57 @@ def init_db():
     
     # ==================== НОВЫЕ ТАБЛИЦЫ ====================
     
-    # Таблица любимых фильмов (с рейтингом пользователя)
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS favorite_movies (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            movie_id INTEGER NOT NULL,
-            added_at TEXT NOT NULL,
-            user_rating INTEGER DEFAULT 0,
-            review TEXT DEFAULT '',
-            UNIQUE(user_id, movie_id)
-        )
-    ''')
-    
-    # Таблица списка "Буду смотреть"
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS watchlist (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            movie_id INTEGER NOT NULL,
-            added_at TEXT NOT NULL,
-            status TEXT DEFAULT 'planned',
-            UNIQUE(user_id, movie_id)
-        )
-    ''')
-    
-    # Таблица "Не понравилось"
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS disliked_movies (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            movie_id INTEGER NOT NULL,
-            added_at TEXT NOT NULL,
-            reason TEXT DEFAULT '',
-            UNIQUE(user_id, movie_id)
-        )
-    ''')
-    
-    # Таблица истории просмотров (для будущей персонализации)
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS watch_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            movie_id INTEGER NOT NULL,
-            watched_at TEXT NOT NULL,
-            UNIQUE(user_id, movie_id)
-        )
-    ''')
-    
-    conn.commit()
-    conn.close()
-    
-    logger.info("✅ Все таблицы инициализированы")
-
+    def init_cinema_tables():
+        """Создаёт таблицы для кинопрофиля и списков"""
+        conn = get_opinions_db_connection()
+        cursor = conn.cursor()
+        
+        # Любимые фильмы (если ещё нет)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS favorite_movies (
+                user_id INTEGER,
+                movie_id INTEGER,
+                added_at TEXT,
+                PRIMARY KEY (user_id, movie_id)
+            )
+        ''')
+        
+        # Буду смотреть
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS watchlist (
+                user_id INTEGER,
+                movie_id INTEGER,
+                added_at TEXT,
+                status TEXT DEFAULT 'planned',  -- planned, watching
+                PRIMARY KEY (user_id, movie_id)
+            )
+        ''')
+        
+        # НЕ ПОНРАВИЛИСЬ
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS disliked_movies (
+                user_id INTEGER,
+                movie_id INTEGER,
+                added_at TEXT,
+                reason TEXT,
+                PRIMARY KEY (user_id, movie_id)
+            )
+        ''')
+        
+        # История запросов (для статистики)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_query_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                query TEXT,
+                agent_mode TEXT,
+                created_at TEXT
+            )
+        ''')
+        
+        conn.commit()
+        conn.close()
+        logger.info("✅ Таблицы для кинопрофиля созданы")
 
 # ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
 
