@@ -10,7 +10,7 @@ logger = logging.getLogger('core.movie')
 # ==================== ПОИСК ФИЛЬМОВ ====================
 
 def search_movies_in_db(query: str, min_rating: float = 0.0, max_rating: float = 10.0) -> list:
-    """Надежный поиск фильмов по названию"""
+    """Надежный поиск фильмов по названию (включая фильмы без рейтинга)"""
     conn = db.get_movies_db_connection()
     try:
         query_clean = db.clean_text(query, for_sql=True).strip()
@@ -43,12 +43,13 @@ def search_movies_in_db(query: str, min_rating: float = 0.0, max_rating: float =
 
         variants = list(set(variants))
 
+        # ⚠️ ИЗМЕНЕНО: добавлено OR rating IS NULL — фильмы без рейтинга тоже находятся
         sql = """
         SELECT id FROM movies
         WHERE (
             """ + " OR ".join([f"(name LIKE ? COLLATE NOCASE)"] * len(variants)) + """
         )
-        AND rating BETWEEN ? AND ?
+        AND (rating BETWEEN ? AND ? OR rating IS NULL)
         ORDER BY
             CASE
                 WHEN name = ? THEN 0
@@ -108,7 +109,7 @@ def search_movies_by_person_in_db(query: str, min_rating: float = 0.0, max_ratin
         conn.close()
 
 def search_person_matches(patterns: list, min_rating: float, max_rating: float) -> list:
-    """Поиск персон по заданным шаблонам"""
+    """Поиск персон по заданным шаблонам (включая фильмы без рейтинга)"""
     conn = db.get_movies_db_connection()
     try:
         conditions = []
@@ -136,11 +137,12 @@ def search_person_matches(patterns: list, min_rating: float, max_rating: float) 
         
         where_clause = " OR ".join(conditions) if conditions else "1=0"
         
+        # ⚠️ ИЗМЕНЕНО: добавлено OR m.rating IS NULL
         sql = f"""
         SELECT DISTINCT m.id 
         FROM movies m
         WHERE ({where_clause})
-        AND m.rating BETWEEN ? AND ?
+        AND (m.rating BETWEEN ? AND ? OR m.rating IS NULL)
         ORDER BY m.rating DESC
         LIMIT 100
         """
@@ -208,9 +210,10 @@ def get_random_movie_from_db(min_rating: float = 7.0, max_rating: float = 10.0, 
         use_new_releases = random.random() < 0.2
         
         if use_new_releases:
+            # ⚠️ ИЗМЕНЕНО: добавлено OR rating IS NULL — новинки без рейтинга тоже попадают
             sql = """
             SELECT id FROM movies 
-            WHERE rating >= 5 AND rating <= 7
+            WHERE (rating >= 5 AND rating <= 7 OR rating IS NULL)
             AND is_new_release = 1
             ORDER BY RANDOM() LIMIT 1
             """
@@ -246,23 +249,34 @@ def get_random_movie_from_db(min_rating: float = 7.0, max_rating: float = 10.0, 
         conn.close()
 
 def get_premier_movies_from_db() -> list:
-    """Получение списка премьерных фильмов за последний месяц и будущих"""
+    """
+    Получение списка премьерных фильмов.
+    Логика: фильмы с is_new_release = 1, у которых:
+      - premiere_russia >= начало прошлого месяца, ИЛИ
+      - premiere_world >= начало прошлого месяца.
+    То есть: с начала прошлого месяца и все будущие.
+    Фильмы без обеих премьер — не показываем.
+    """
     conn = db.get_movies_db_connection()
     cursor = conn.cursor()
     
     try:
-        one_month_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+        # ⚠️ ИЗМЕНЕНО: порог — начало прошлого месяца (было 7 дней назад)
+        today = datetime.now()
+        first_of_this_month = today.replace(day=1)
+        first_of_last_month = (first_of_this_month - timedelta(days=1)).replace(day=1)
+        date_threshold = first_of_last_month.strftime("%Y-%m-%d")
         
         sql = """
         SELECT id FROM movies 
-        WHERE is_new_release = 1 AND 
-            (premiere_russia >= ? OR premiere_world >= ?)
+        WHERE is_new_release = 1 
+          AND (premiere_russia >= ? OR premiere_world >= ?)
         ORDER BY 
             COALESCE(premiere_russia, premiere_world) ASC,
             await_count DESC
         LIMIT 100
         """
-        cursor.execute(sql, (one_month_ago, one_month_ago))
+        cursor.execute(sql, (date_threshold, date_threshold))
         movie_ids = [row[0] for row in cursor.fetchall()]
         
         movies_with_details = []
