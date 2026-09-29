@@ -992,7 +992,7 @@ class MaxAdapter:
         context = self._get_user_context(user_id)
         received = context.get('slide_frames_received', 0)
 
-        async with httpx.AsyncClient(timeout=120.0, verify=CHAIN_PATH) as client:
+        async with httpx.AsyncClient(timeout=120.0, verify=CA_CHAIN_PATH) as client:
             for photo in photos:
                 if received >= 5:
                     break
