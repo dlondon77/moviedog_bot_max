@@ -1102,7 +1102,7 @@ class MaxAdapter:
     
         ext = os.path.splitext(filename)[1].lower()
         mime_map = {
-            ".html": "text/html",
+            ".html": "application/octet-stream",  # MAX не принимает text/html
             ".txt": "text/plain",
             ".jpg": "image/jpeg",
             ".jpeg": "image/jpeg",
