@@ -43,6 +43,11 @@ from maxapi.types import BotStarted, MessageCreated
 from openai import OpenAI
 import httpx
 
+import certifi
+import ssl as _ssl
+
+CERTIFI_CONTEXT = _ssl.create_default_context(cafile=certifi.where())
+
 # Импорт утилит слайдов (после sys.path.insert)
 try:
     from slide_files import (
@@ -991,7 +996,7 @@ class MaxAdapter:
         context = self._get_user_context(user_id)
         received = context.get('slide_frames_received', 0)
 
-        async with httpx.AsyncClient(timeout=120.0, verify=False) as client:
+        async with httpx.AsyncClient(timeout=120.0, verify=CERTIFI_CONTEXT) as client:
             for photo in photos:
                 if received >= 5:
                     break
@@ -1099,7 +1104,7 @@ class MaxAdapter:
         headers = {"Authorization": self.token}
         base_url = "https://platform-api2.max.ru"
 
-        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True, verify=CERTIFI_CONTEXT) as client:
             # 1. Получаем URL для загрузки
             r1 = await client.post(
                 f"{base_url}/uploads",
