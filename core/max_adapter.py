@@ -1106,7 +1106,22 @@ class MaxAdapter:
         headers = {"Authorization": self.token}
         base_url = "https://platform-api2.max.ru"
 
-        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True, verify=CERTIFI_CONTEXT) as client:
+        # === ДИАГНОСТИКА: какой issuer у platform-api2.max.ru ===
+        try:
+            import socket
+            _ctx = _ssl.create_default_context(cafile=certifi.where())
+            with socket.create_connection(("platform-api2.max.ru", 443), timeout=5) as sock:
+                with _ctx.wrap_socket(sock, server_hostname="platform-api2.max.ru") as ssock:
+                    cert = ssock.getpeercert()
+                    logger.info(f"[platform-api2.max.ru] issuer = {cert.get('issuer')}")
+        except Exception as e:
+            logger.error(f"Диагностика SSL: {e}")
+
+        async with httpx.AsyncClient(
+            timeout=60.0,
+            follow_redirects=True,
+            verify=CERTIFI_CONTEXT,
+        ) as client:
             # 1. Получаем URL для загрузки
             r1 = await client.post(
                 f"{base_url}/uploads",
