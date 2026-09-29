@@ -1129,10 +1129,9 @@ class MaxAdapter:
             upload_meta = r1.json()
             upload_url = upload_meta["url"]
     
-            # 2. Заливаем файл
+            # 2. Заливаем файл — без ручного Content-Type, поле "file"
             with open(file_path, "rb") as f:
-                files = {"data": (filename, f, mime)}
-                # Явно указываем, что это multipart/form-data
+                files = {"file": (filename, f, mime)}
                 r2 = await client.post(upload_url, files=files)
             r2.raise_for_status()
             uploaded_payload = r2.json()
