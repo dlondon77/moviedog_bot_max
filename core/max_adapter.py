@@ -1100,7 +1100,7 @@ class MaxAdapter:
         headers = {"Authorization": self.token}
         base_url = "https://platform-api2.max.ru"
 
-        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True, verify=CHAIN_PATH) as client:
+        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True, verify=CA_CHAIN_PATH) as client:
             # 1. Получаем URL для загрузки
             r1 = await client.post(
                 f"{base_url}/uploads",
