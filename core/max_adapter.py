@@ -15,7 +15,6 @@ import re
 import json
 import asyncio
 import subprocess
-import ssl
 from typing import List, Dict
 from datetime import date, datetime, timedelta
 
@@ -43,20 +42,6 @@ from maxapi import Bot, Dispatcher, F
 from maxapi.types import BotStarted, MessageCreated
 from openai import OpenAI
 import httpx
-import ssl
-
-CA_CHAIN_PATH = os.path.join(BASE_DIR, "russian_trusted_chain.pem")
-
-# Устанавливаем глобальные переменные для SSL
-os.environ['SSL_CERT_FILE'] = CA_CHAIN_PATH
-os.environ['REQUESTS_CA_BUNDLE'] = CA_CHAIN_PATH
-
-try:
-    SSL_CONTEXT = ssl.create_default_context(cafile=CA_CHAIN_PATH)
-    logger.info(f"✅ SSL-контекст загружен из {CA_CHAIN_PATH}")
-except Exception as e:
-    logger.error(f"⚠️ Не удалось загрузить SSL-контекст: {e}")
-    SSL_CONTEXT = True
 
 # Импорт утилит слайдов (после sys.path.insert)
 try:
