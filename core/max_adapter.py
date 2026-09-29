@@ -1077,33 +1077,76 @@ class MaxAdapter:
             )
             return
 
-        # === Отправляем только текст поста ===
-        post_path = os.path.join(SLIDES_OUTPUT, "post.txt")
-        if not os.path.exists(post_path):
-            await event.message.answer("🐾 Файл post.txt не найден. Проверь логи.")
+        files = result.get("files", [])
+        if not files:
+            await event.message.answer("🐾 Генератор не вернул файлов. Проверь логи.")
             return
+
+        # === 1. Собираем ZIP ===
+        zip_name = "slides.zip"
+        zip_path = os.path.join(SLIDES_OUTPUT, zip_name)
 
         try:
-            with open(post_path, "r", encoding="utf-8") as f:
-                post_text = f.read()
-
-            # Обрезаем под лимит MAX (4000 символов)
-            if len(post_text) > 3800:
-                post_text = post_text[:3800] + "\n\n… (продолжение в post.txt)"
-
-            await event.message.answer(
-                f"📝 <b>Текст поста:</b>\n\n{post_text}",
-                parse_mode="html"
-            )
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                for name in files:
+                    file_path = os.path.join(SLIDES_OUTPUT, name)
+                    if os.path.exists(file_path):
+                        zf.write(file_path, arcname=name)
+            logger.info(f"✅ ZIP собран: {zip_path}")
         except Exception as e:
-            logger.error(f"Ошибка отправки post.txt текстом: {e}")
-            await event.message.answer(f"⚠️ Не смогла отправить пост: {e}")
-            return
+            logger.error(f"Ошибка сборки ZIP: {e}")
+            zip_path = None
+
+        # === 2. Пробуем отправить ZIP в чат (не падаем при ошибке) ===
+        zip_sent = False
+        if zip_path and os.path.exists(zip_path):
+            try:
+                await self._send_document(event, zip_path)
+                zip_sent = True
+                logger.info("✅ ZIP отправлен в чат")
+            except Exception as e:
+                logger.warning(f"⚠️ Не смогла отправить ZIP в чат: {e}")
+
+        # === 3. Отправляем post.txt текстом ===
+        post_path = os.path.join(SLIDES_OUTPUT, "post.txt")
+        if os.path.exists(post_path):
+            try:
+                with open(post_path, "r", encoding="utf-8") as f:
+                    post_text = f.read()
+
+                # Обрезаем под лимит MAX (4000 символов)
+                if len(post_text) > 3800:
+                    post_text = post_text[:3800] + "\n\n… (продолжение в post.txt)"
+
+                await event.message.answer(
+                    f"📝 <b>Текст поста:</b>\n\n{post_text}",
+                    parse_mode="html"
+                )
+            except Exception as e:
+                logger.error(f"Ошибка отправки post.txt текстом: {e}")
+
+        # === 4. Финальное сообщение + ссылка на Bothost ===
+        bothost_url = "https://bothost.ru/file-manager.php?bot=bot_1790103008_5442_dimamuffin&path=%2Fapp%2Fslides%2Foutput"
+
+        if zip_sent:
+            final_text = (
+                "🎉 <b>Готово!</b>\n\n"
+                "📦 Архив <b>slides.zip</b> отправлен выше.\n"
+                f"📂 <a href='{bothost_url}'>Открыть папку с файлами в Bothost</a>\n\n"
+                "💡 Внутри: card_1..5.html и post.txt. "
+                "Открой HTML в браузере и сделай скриншот через DevTools → Capture node screenshot."
+            )
+        else:
+            final_text = (
+                "🎉 <b>Готово!</b>\n\n"
+                "⚠️ Отправить архив в чат не удалось (MAX не принимает ZIP).\n"
+                f"📂 <a href='{bothost_url}'>Открыть папку с файлами в Bothost</a>\n\n"
+                "💡 Скачай оттуда <b>card_1..5.html</b>, <b>post.txt</b> и <b>slides.zip</b>. "
+                "HTML открой в браузере и сделай скриншот через DevTools → Capture node screenshot."
+            )
 
         await event.message.answer(
-            "🎉 <b>Готово!</b>\n\n"
-            "📄 HTML-карточки лежат в output/ на сервере.\n"
-            "💡 Открой их через файловый менеджер Bothost или скачай вручную.",
+            final_text,
             parse_mode="html",
             attachments=[get_main_menu()]
         )
