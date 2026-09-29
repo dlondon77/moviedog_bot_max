@@ -43,25 +43,12 @@ from maxapi.types import BotStarted, MessageCreated
 from openai import OpenAI
 import httpx
 
-# === ДИАГНОСТИКА ===
+# === SSL через certifi (публичные CA) ===
 import certifi
 import ssl as _ssl
 
-logger.info(f"certifi.where() = {certifi.where()}")
-logger.info(f"CERTIFI_CONTEXT = {CERTIFI_CONTEXT}")
-logger.info(f"verify mode = {CERTIFI_CONTEXT.verify_mode if hasattr(CERTIFI_CONTEXT, 'verify_mode') else 'N/A'}")
-
-# Проверим, какой сертификат у upload_url и base_url
-try:
-    import socket
-    for host in ["platform-api2.max.ru"]:
-        ctx = _ssl.create_default_context(cafile=certifi.where())
-        with socket.create_connection((host, 443), timeout=5) as sock:
-            with ctx.wrap_socket(sock, server_hostname=host) as ssock:
-                cert = ssock.getpeercert()
-                logger.info(f"[{host}] issuer = {cert.get('issuer')}")
-except Exception as e:
-    logger.error(f"Диагностика SSL для {host}: {e}")
+CERTIFI_CONTEXT = _ssl.create_default_context(cafile=certifi.where())
+logger.info(f"✅ certifi: {certifi.where()}")
 
 # Импорт утилит слайдов (после sys.path.insert)
 try:
