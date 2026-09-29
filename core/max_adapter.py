@@ -1182,10 +1182,9 @@ class MaxAdapter:
             # MAX ожидает в payload вложения только token
             file_token = uploaded_payload.get("token")
 
-            # 3. Отправляем сообщение с файлом
+            # 3. Отправляем сообщение с файлом (без текста)
             message_payload = {
                 "chat_id": chat_id,
-                "text": f"📎 {filename}",
                 "attachments": [
                     {"type": "file", "payload": {"token": file_token}}
                 ],
