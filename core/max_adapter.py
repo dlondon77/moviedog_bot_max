@@ -1175,26 +1175,43 @@ class MaxAdapter:
                 r2 = await client.post(upload_url, files=files)
             r2.raise_for_status()
             uploaded_payload = r2.json()
-
-            # === ДИАГНОСТИКА ===
             logger.info(f"[uploaded_payload] = {uploaded_payload}")
-
+            
             # MAX ожидает в payload вложения только token
             file_token = uploaded_payload.get("token")
-
-            # 3. Отправляем сообщение с файлом (без текста)
+            
             message_payload = {
                 "chat_id": chat_id,
+                "text": f"📎 {filename}",
                 "attachments": [
                     {"type": "file", "payload": {"token": file_token}}
                 ],
             }
-            r3 = await client.post(
-                f"{base_url}/messages",
-                json=message_payload,
-                headers={**headers, "Content-Type": "application/json"},
-            )
-            r3.raise_for_status()
+            
+            # Пытаемся отправить сообщение с повторными попытками
+            import asyncio
+            max_retries = 5
+            for attempt in range(max_retries):
+                r3 = await client.post(
+                    f"{base_url}/messages",
+                    json=message_payload,
+                    headers={**headers, "Content-Type": "application/json"},
+                )
+                
+                if r3.status_code == 200:
+                    logger.info(f"✅ Сообщение с файлом отправлено (попытка {attempt + 1})")
+                    break
+                elif r3.status_code == 400 and "attachment.not.ready" in r3.text:
+                    # Файл ещё обрабатывается, ждём и пробуем снова
+                    wait_time = 2 ** attempt  # 1, 2, 4, 8, 16 секунд
+                    logger.warning(f"⏳ Файл не готов, ждём {wait_time} сек (попытка {attempt + 1}/{max_retries})")
+                    await asyncio.sleep(wait_time)
+                else:
+                    # Другая ошибка — не retry
+                    r3.raise_for_status()
+            else:
+                # Все попытки исчерпаны
+                r3.raise_for_status()
 
     # ==================== ОБРАБОТЧИК КНОПОК ====================
     async def _handle_callback(self, event):
