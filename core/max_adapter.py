@@ -1179,12 +1179,15 @@ class MaxAdapter:
             # === ДИАГНОСТИКА ===
             logger.info(f"[uploaded_payload] = {uploaded_payload}")
 
+            # MAX ожидает в payload вложения только token
+            file_token = uploaded_payload.get("token")
+
             # 3. Отправляем сообщение с файлом
             message_payload = {
                 "chat_id": chat_id,
                 "text": f"📎 {filename}",
                 "attachments": [
-                    {"type": "file", "payload": uploaded_payload}
+                    {"type": "file", "payload": {"token": file_token}}
                 ],
             }
             r3 = await client.post(
