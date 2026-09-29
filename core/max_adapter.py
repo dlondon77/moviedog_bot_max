@@ -1095,61 +1095,61 @@ class MaxAdapter:
             attachments=[get_main_menu()]
         )
 
-async def _send_document(self, event, file_path: str):
-    """Загружает файл в MAX через /uploads и отправляет сообщением."""
-    chat_id = event.message.recipient.chat_id
-    filename = os.path.basename(file_path)
-
-    ext = os.path.splitext(filename)[1].lower()
-    mime_map = {
-        ".html": "text/html",
-        ".txt": "text/plain",
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".png": "image/png",
-        ".pdf": "application/pdf",
-    }
-    mime = mime_map.get(ext, "application/octet-stream")
-
-    headers = {"Authorization": self.token}
-    base_url = "https://platform-api2.max.ru"
-
-    async with httpx.AsyncClient(
-        timeout=60.0,
-        follow_redirects=True,
-        verify=CERTIFI_CONTEXT,
-    ) as client:
-        # 1. Получаем URL для загрузки
-        r1 = await client.post(
-            f"{base_url}/uploads",
-            params={"type": "file"},
-            headers=headers,
-        )
-        r1.raise_for_status()
-        upload_meta = r1.json()
-        upload_url = upload_meta["url"]
-
-        # 2. Заливаем файл
-        with open(file_path, "rb") as f:
-            files = {"data": (filename, f, mime)}
-            r2 = await client.post(upload_url, files=files)
-            r2.raise_for_status()
-            uploaded_payload = r2.json()
-
-        # 3. Отправляем сообщение с файлом
-        message_payload = {
-            "chat_id": chat_id,
-            "text": f"📎 {filename}",
-            "attachments": [
-                {"type": "file", "payload": uploaded_payload}
-            ],
+    async def _send_document(self, event, file_path: str):
+        """Загружает файл в MAX через /uploads и отправляет сообщением."""
+        chat_id = event.message.recipient.chat_id
+        filename = os.path.basename(file_path)
+    
+        ext = os.path.splitext(filename)[1].lower()
+        mime_map = {
+            ".html": "text/html",
+            ".txt": "text/plain",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".png": "image/png",
+            ".pdf": "application/pdf",
         }
-        r3 = await client.post(
-            f"{base_url}/messages",
-            json=message_payload,
-            headers={**headers, "Content-Type": "application/json"},
-        )
-        r3.raise_for_status()
+        mime = mime_map.get(ext, "application/octet-stream")
+    
+        headers = {"Authorization": self.token}
+        base_url = "https://platform-api2.max.ru"
+    
+        async with httpx.AsyncClient(
+            timeout=60.0,
+            follow_redirects=True,
+            verify=CERTIFI_CONTEXT,
+        ) as client:
+            # 1. Получаем URL для загрузки
+            r1 = await client.post(
+                f"{base_url}/uploads",
+                params={"type": "file"},
+                headers=headers,
+            )
+            r1.raise_for_status()
+            upload_meta = r1.json()
+            upload_url = upload_meta["url"]
+    
+            # 2. Заливаем файл
+            with open(file_path, "rb") as f:
+                files = {"data": (filename, f, mime)}
+                r2 = await client.post(upload_url, files=files)
+                r2.raise_for_status()
+                uploaded_payload = r2.json()
+    
+            # 3. Отправляем сообщение с файлом
+            message_payload = {
+                "chat_id": chat_id,
+                "text": f"📎 {filename}",
+                "attachments": [
+                    {"type": "file", "payload": uploaded_payload}
+                ],
+            }
+            r3 = await client.post(
+                f"{base_url}/messages",
+                json=message_payload,
+                headers={**headers, "Content-Type": "application/json"},
+            )
+            r3.raise_for_status()
 
     # ==================== ОБРАБОТЧИК КНОПОК ====================
     async def _handle_callback(self, event):
