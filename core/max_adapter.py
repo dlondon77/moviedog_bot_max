@@ -43,12 +43,22 @@ from maxapi.types import BotStarted, MessageCreated
 from openai import OpenAI
 import httpx
 
-# === SSL через certifi (публичные CA) ===
+# === SSL: certifi + сертификаты Минцифры ===
 import certifi
 import ssl as _ssl
 
 CERTIFI_CONTEXT = _ssl.create_default_context(cafile=certifi.where())
-logger.info(f"✅ certifi: {certifi.where()}")
+
+# Догружаем цепочку Минцифры поверх certifi
+_CA_CHAIN_PATH = os.path.join(BASE_DIR, "russian_trusted_chain.pem")
+if os.path.exists(_CA_CHAIN_PATH):
+    try:
+        CERTIFI_CONTEXT.load_verify_locations(cafile=_CA_CHAIN_PATH)
+        logger.info(f"✅ SSL: certifi + {_CA_CHAIN_PATH}")
+    except Exception as e:
+        logger.error(f"⚠️ Не удалось загрузить цепочку Минцифры: {e}")
+else:
+    logger.warning(f"⚠️ Файл {_CA_CHAIN_PATH} не найден — используется только certifi")
 
 # Импорт утилит слайдов (после sys.path.insert)
 try:
