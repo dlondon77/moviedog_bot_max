@@ -1175,7 +1175,10 @@ class MaxAdapter:
                 r2 = await client.post(upload_url, files=files)
             r2.raise_for_status()
             uploaded_payload = r2.json()
-    
+
+            # === ДИАГНОСТИКА ===
+            logger.info(f"[uploaded_payload] = {uploaded_payload}")
+
             # 3. Отправляем сообщение с файлом
             message_payload = {
                 "chat_id": chat_id,
