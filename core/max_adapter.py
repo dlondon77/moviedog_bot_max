@@ -47,6 +47,10 @@ import ssl
 
 CA_CHAIN_PATH = os.path.join(BASE_DIR, "russian_trusted_chain.pem")
 
+# Устанавливаем глобальные переменные для SSL
+os.environ['SSL_CERT_FILE'] = CA_CHAIN_PATH
+os.environ['REQUESTS_CA_BUNDLE'] = CA_CHAIN_PATH
+
 try:
     SSL_CONTEXT = ssl.create_default_context(cafile=CA_CHAIN_PATH)
     logger.info(f"✅ SSL-контекст загружен из {CA_CHAIN_PATH}")
