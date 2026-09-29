@@ -1078,20 +1078,57 @@ class MaxAdapter:
             return
 
         files = result.get("files", [])
-        sent = 0
-        for name in files:
-            path = os.path.join(SLIDES_OUTPUT, name)
-            if not os.path.exists(path):
-                continue
-            try:
-                await self._send_document(event, path)
-                sent += 1
-            except Exception as e:
-                logger.error(f"Ошибка отправки {name}: {e}")
-                await event.message.answer(f"⚠️ Не смогла отправить {name}")
+        if not files:
+            await event.message.answer("🐾 Генератор не вернул файлов. Проверь логи.")
+            return
 
+        # === Упаковываем всё в один ZIP ===
+        zip_name = "slides.zip"
+        zip_path = os.path.join(SLIDES_OUTPUT, zip_name)
+
+        try:
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                for name in files:
+                    file_path = os.path.join(SLIDES_OUTPUT, name)
+                    if os.path.exists(file_path):
+                        zf.write(file_path, arcname=name)
+            logger.info(f"✅ ZIP собран: {zip_path}")
+        except Exception as e:
+            logger.error(f"Ошибка сборки ZIP: {e}")
+            await event.message.answer("🐾 Не смогла собрать архив. Проверь логи.")
+            return
+
+        # === Отправляем ZIP ===
+        try:
+            await self._send_document(event, zip_path)
+        except Exception as e:
+            logger.error(f"Ошибка отправки ZIP: {e}")
+            await event.message.answer(f"⚠️ Не смогла отправить архив: {e}")
+            return
+
+        # === Отдельно отправляем post.txt, чтобы сразу видеть текст ===
+        post_path = os.path.join(SLIDES_OUTPUT, "post.txt")
+        if os.path.exists(post_path):
+            try:
+                with open(post_path, "r", encoding="utf-8") as f:
+                    post_text = f.read()
+
+                # Обрезаем, если больше лимита MAX (4000 символов)
+                if len(post_text) > 3800:
+                    post_text = post_text[:3800] + "\n\n… (продолжение в post.txt)"
+
+                await event.message.answer(
+                    f"📝 <b>Текст поста:</b>\n\n{post_text}",
+                    parse_mode="html"
+                )
+            except Exception as e:
+                logger.error(f"Ошибка отправки post.txt текстом: {e}")
+
+        # === Финальное сообщение ===
         await event.message.answer(
-            f"🎉 <b>Готово!</b> Отправлено файлов: {sent}.",
+            "🎉 <b>Готово!</b>\n\n"
+            "📦 В архиве <b>slides.zip</b>: 5 HTML-карточек + post.txt.\n"
+            "💡 Открой HTML в браузере и сделай скриншот через DevTools → Capture node screenshot.",
             parse_mode="html",
             attachments=[get_main_menu()]
         )
@@ -1103,12 +1140,13 @@ class MaxAdapter:
     
         ext = os.path.splitext(filename)[1].lower()
         mime_map = {
-            ".html": "application/octet-stream",  # MAX не принимает text/html
+            ".html": "application/octet-stream",
             ".txt": "text/plain",
             ".jpg": "image/jpeg",
             ".jpeg": "image/jpeg",
             ".png": "image/png",
             ".pdf": "application/pdf",
+            ".zip": "application/zip",
         }
         mime = mime_map.get(ext, "application/octet-stream")
     
