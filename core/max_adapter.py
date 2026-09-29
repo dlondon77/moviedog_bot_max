@@ -35,14 +35,6 @@ SLIDES_RUNNER = os.path.join(SLIDES_DIR, "run_slides.py")
 SLIDES_PYTHON = sys.executable
 CA_CHAIN_PATH = os.path.join(BASE_DIR, "russian_trusted_chain.pem")
 
-# Создаём SSL-контекст с нашим CA bundle
-try:
-    SSL_CONTEXT = ssl.create_default_context(cafile=CA_CHAIN_PATH)
-    logger.info(f"✅ SSL-контекст загружен из {CA_CHAIN_PATH}")
-except Exception as e:
-    logger.error(f"⚠️ Не удалось загрузить SSL-контекст: {e}")
-    SSL_CONTEXT = True  # fallback на дефолтный
-
 if SLIDES_DIR not in sys.path:
     sys.path.insert(0, SLIDES_DIR)
 
@@ -52,6 +44,14 @@ from maxapi import Bot, Dispatcher, F
 from maxapi.types import BotStarted, MessageCreated
 from openai import OpenAI
 import httpx
+
+# Создаём SSL-контекст с нашим CA bundle
+try:
+    SSL_CONTEXT = ssl.create_default_context(cafile=CA_CHAIN_PATH)
+    logger.info(f"✅ SSL-контекст загружен из {CA_CHAIN_PATH}")
+except Exception as e:
+    logger.error(f"⚠️ Не удалось загрузить SSL-контекст: {e}")
+    SSL_CONTEXT = True  # fallback на дефолтный
 
 # Импорт утилит слайдов (после sys.path.insert)
 try:
