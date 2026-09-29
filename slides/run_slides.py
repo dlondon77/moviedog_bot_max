@@ -1,7 +1,12 @@
 # run_slides.py
 """
 CLI-обёртка для генерации слайдов.
-Возвращает JSON в stdout — его парсит бот.
+
+Приоритет выбора рубрики:
+  1. --rubric (аргумент)
+  2. input/rubric.txt
+  3. переменная окружения RUBRIC
+  4. интерактивное меню (только в терминале)
 """
 
 import os
@@ -44,10 +49,54 @@ def interactive_menu():
     key, title, enabled = items[idx]
     print(f"\nТы выбрал: {title}\n")
 
-    input_dir = input(f"Папка input [{key}/input/]: ").strip() or "input"
-    output_dir = input(f"Папка output [output/]: ").strip() or "output"
+    input_dir = input("Папка input [input]: ").strip() or "input"
+    output_dir = input("Папка output [output]: ").strip() or "output"
 
     return key, input_dir, output_dir
+
+
+def read_rubric_from_file(input_dir):
+    """Читает код рубрики из input/rubric.txt."""
+    path = os.path.join(input_dir, "rubric.txt")
+    if not os.path.exists(path):
+        return None
+    with open(path, "r", encoding="utf-8") as f:
+        key = f.read().strip()
+    return key or None
+
+
+def resolve_rubric(args, input_dir):
+    """
+    Определяет рубрику по приоритету:
+      1. --rubric
+      2. input/rubric.txt
+      3. RUBRIC из окружения
+      4. интерактивное меню (если терминал)
+    Возвращает (rubric_key, source) или (None, None).
+    """
+    # 1. Аргумент
+    if args.rubric:
+        return args.rubric, "cli"
+
+    # 2. Файл
+    key = read_rubric_from_file(input_dir)
+    if key:
+        return key, "file"
+
+    # 3. Переменная окружения
+    key = os.environ.get("RUBRIC", "").strip()
+    if key:
+        return key, "env"
+
+    # 4. Интерактив — только если запущено в живом терминале
+    if sys.stdin.isatty() and not args.json:
+        key, input_dir, output_dir = interactive_menu()
+        # Перезапишем пути — их вернул интерактив
+        args.input = input_dir
+        args.output = output_dir
+        return key, "interactive"
+
+    return None, None
 
 
 def main():
@@ -59,21 +108,21 @@ def main():
 
     args = parser.parse_args()
 
-    # Если рубрика не задана и мы в интерактиве — показать меню
-    if not args.rubric:
-        if sys.stdin.isatty() and not args.json:
-            rubric_key, input_dir, output_dir = interactive_menu()
-        else:
-            print(json.dumps({
-                "ok": False,
-                "error": "Не указана рубрика (--rubric)",
-                "code": "NO_RUBRIC",
-            }, ensure_ascii=False))
-            sys.exit(1)
-    else:
-        rubric_key = args.rubric
-        input_dir = args.input
-        output_dir = args.output
+    rubric_key, source = resolve_rubric(args, args.input)
+
+    if not rubric_key:
+        result = {
+            "ok": False,
+            "error": "Рубрика не указана. Передай --rubric, положи код в input/rubric.txt "
+                     "или запусти в терминале для интерактивного меню.",
+            "code": "NO_RUBRIC",
+        }
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        sys.exit(1)
+
+    # Пути могут быть переопределены интерактивом — считываем заново
+    input_dir = args.input
+    output_dir = args.output
 
     # Проверка input
     ok, missing = check_input_ready(input_dir, required_frames=5)
@@ -89,7 +138,10 @@ def main():
 
     # Генерация
     result = generate(rubric_key, input_dir, output_dir)
+    result["rubric"] = rubric_key
+    result["rubric_source"] = source
 
+    # JSON — для бота или если явно попросили
     if args.json or not sys.stdin.isatty():
         print(json.dumps(result, ensure_ascii=False, indent=2))
 
