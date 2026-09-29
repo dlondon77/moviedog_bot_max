@@ -1132,9 +1132,14 @@ class MaxAdapter:
             # 2. Заливаем файл
             with open(file_path, "rb") as f:
                 files = {"data": (filename, f, mime)}
-                r2 = await client.post(upload_url, files=files)
-                r2.raise_for_status()
-                uploaded_payload = r2.json()
+                # Явно указываем, что это multipart/form-data
+                r2 = await client.post(
+                    upload_url,
+                    files=files,
+                    headers={"Content-Type": "multipart/form-data"}
+                )
+            r2.raise_for_status()
+            uploaded_payload = r2.json()
     
             # 3. Отправляем сообщение с файлом
             message_payload = {
