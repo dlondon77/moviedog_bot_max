@@ -32,6 +32,7 @@ SLIDES_INPUT = os.path.join(SLIDES_DIR, "input")
 SLIDES_OUTPUT = os.path.join(SLIDES_DIR, "output")
 SLIDES_RUNNER = os.path.join(SLIDES_DIR, "run_slides.py")
 SLIDES_PYTHON = sys.executable
+CA_CHAIN_PATH = os.path.join(BASE_DIR, "russian_trusted_chain.pem")
 
 if SLIDES_DIR not in sys.path:
     sys.path.insert(0, SLIDES_DIR)
@@ -991,7 +992,7 @@ class MaxAdapter:
         context = self._get_user_context(user_id)
         received = context.get('slide_frames_received', 0)
 
-        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=120.0, verify=CHAIN_PATH) as client:
             for photo in photos:
                 if received >= 5:
                     break
@@ -1099,7 +1100,7 @@ class MaxAdapter:
         headers = {"Authorization": self.token}
         base_url = "https://platform-api2.max.ru"
 
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True, verify=CHAIN_PATH) as client:
             # 1. Получаем URL для загрузки
             r1 = await client.post(
                 f"{base_url}/uploads",
