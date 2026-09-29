@@ -1129,9 +1129,10 @@ class MaxAdapter:
             upload_meta = r1.json()
             upload_url = upload_meta["url"]
     
-            # 2. Заливаем файл — без ручного Content-Type, поле "file"
+            # 2. Заливаем файл
             with open(file_path, "rb") as f:
-                files = {"file": (filename, f, mime)}
+                files = {"data": (filename, f, mime)}
+                # НЕ указываем Content-Type вручную — httpx сам добавит boundary
                 r2 = await client.post(upload_url, files=files)
             r2.raise_for_status()
             uploaded_payload = r2.json()
