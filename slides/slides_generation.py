@@ -18,9 +18,10 @@ from rubrics import get_rubric
 # DEEPSEEK
 # ============================================================
 
-DEEPSEEK_API_KEY = os.environ.get(
-    "DEEPSEEK_API_KEY",
-    "sk-1be9e78c0cd347d4bdda68f8b54e0992",
+DEEPSEEK_API_KEY = (
+    os.environ.get("DEEPSEEK_API_KEY")
+    or os.environ.get("OPENAI_API_KEY")
+    or ""
 )
 DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions"
 
