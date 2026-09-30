@@ -1107,48 +1107,39 @@ class MaxAdapter:
             except Exception as e:
                 logger.warning(f"⚠️ Не смогла отправить ZIP в чат: {e}")
 
-        # === 3. Отправляем post.txt текстом ===
-        post_path = os.path.join(SLIDES_OUTPUT, "post.txt")
-        if os.path.exists(post_path):
-            try:
-                with open(post_path, "r", encoding="utf-8") as f:
-                    post_text = f.read()
+        # === 3. Финальное сообщение + ссылка на архив ===
+        download_url = (
+            "https://bothost.ru/file-manager.php"
+            "?bot=bot_1790103008_5442_dimamuffin"
+            "&download=%2Fapp%2Fslides%2Foutput%2Fslides.zip"
+        )
 
-                # Обрезаем под лимит MAX (4000 символов)
-                if len(post_text) > 3800:
-                    post_text = post_text[:3800] + "\n\n… (продолжение в post.txt)"
-
-                await event.message.answer(
-                    f"📝 <b>Текст поста:</b>\n\n{post_text}",
-                    parse_mode="html"
-                )
-            except Exception as e:
-                logger.error(f"Ошибка отправки post.txt текстом: {e}")
-
-        # === 4. Финальное сообщение + ссылка на Bothost ===
-        bothost_url = "https://bothost.ru/file-manager.php?bot=bot_1790103008_5442_dimamuffin&path=%2Fapp%2Fslides%2Foutput"
+        buttons = [
+            [{"type": "callback", "text": "🎨 Слайды", "payload": "slides_menu"}],
+            [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}],
+        ]
+        keyboard = InlineKeyboardMarkup(buttons)
 
         if zip_sent:
-            final_text = (
+            text = (
                 "🎉 <b>Готово!</b>\n\n"
                 "📦 Архив <b>slides.zip</b> отправлен выше.\n"
-                f"📂 <a href='{bothost_url}'>Открыть папку с файлами в Bothost</a>\n\n"
-                "💡 Внутри: card_1..5.html и post.txt. "
+                f"📂 <a href='{download_url}'>Скачать архив</a>\n\n"
+                "💡 Внутри: card_1..5.html, post.txt, post.html. "
                 "Открой HTML в браузере и сделай скриншот через DevTools → Capture node screenshot."
             )
         else:
-            final_text = (
+            text = (
                 "🎉 <b>Готово!</b>\n\n"
-                "⚠️ Отправить архив в чат не удалось (MAX не принимает ZIP).\n"
-                f"📂 <a href='{bothost_url}'>Открыть папку с файлами в Bothost</a>\n\n"
-                "💡 Скачай оттуда <b>card_1..5.html</b>, <b>post.txt</b> и <b>slides.zip</b>. "
-                "HTML открой в браузере и сделай скриншот через DevTools → Capture node screenshot."
+                f"📂 <a href='{download_url}'>Скачать slides.zip</a>\n\n"
+                "💡 Внутри: card_1..5.html, post.txt, post.html. "
+                "Открой HTML в браузере и сделай скриншот через DevTools → Capture node screenshot."
             )
 
         await event.message.answer(
-            final_text,
+            text,
             parse_mode="html",
-            attachments=[get_main_menu()]
+            attachments=[keyboard],
         )
 
     async def _send_document(self, event, file_path: str):
