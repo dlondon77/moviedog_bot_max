@@ -1,107 +1,685 @@
-    async def _run_slides_generation(self, event, user_id: int):
-        context = self._get_user_context(user_id)
-        context['slide_state'] = None
+# slides_generation.py
+"""
+Библиотека генерации слайдов КиноИщейки.
+Точка входа: generate(rubric_key, input_dir, output_dir).
 
-        await event.message.answer("🎨 Генерирую слайды... Это может занять 20–40 секунд.")
+Умеет:
+- single-рубрики (1 фильм → 5 HTML-карточек + post.txt + post.html)
+- multi-рубрики (заглушка)
+"""
 
-        try:
-            proc = subprocess.run(
-                [
-                    SLIDES_PYTHON, SLIDES_RUNNER,
-                    "--rubric", context.get('slide_rubric', ''),
-                    "--input", SLIDES_INPUT,
-                    "--output", SLIDES_OUTPUT,
-                    "--json",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=300,
-                cwd=SLIDES_DIR,
+import os
+import re
+import base64
+import json
+import logging
+import requests
+
+from rubrics import get_rubric
+
+
+# ============================================================
+# DEEPSEEK
+# ============================================================
+
+DEEPSEEK_API_KEY = (
+    os.environ.get("DEEPSEEK_API_KEY")
+    or os.environ.get("OPENAI_API_KEY")
+    or ""
+)
+DEEPSEEK_URL = "https://api.deepseek.com/v1/chat/completions"
+
+if not DEEPSEEK_API_KEY:
+    raise RuntimeError(
+        "DEEPSEEK_API_KEY не задан. "
+        "Пропиши его в переменных окружения Bothost и перезапусти бота."
+    )
+
+
+# ============================================================
+# ЛОГИРОВАНИЕ
+# ============================================================
+
+def setup_logger(log_path):
+    logger = logging.getLogger("slides")
+    logger.setLevel(logging.INFO)
+
+    for h in list(logger.handlers):
+        logger.removeHandler(h)
+
+    fmt = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+
+    fh = logging.FileHandler(log_path, encoding="utf-8")
+    fh.setFormatter(fmt)
+    logger.addHandler(fh)
+
+    sh = logging.StreamHandler()
+    sh.setFormatter(fmt)
+    logger.addHandler(sh)
+
+    return logger
+
+
+# ============================================================
+# ПАРСЕРЫ
+# ============================================================
+
+def parse_film_file(file_path):
+    with open(file_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    result = {
+        "title": "",
+        "country": "",
+        "year": "",
+        "director": "",
+        "actors": "",
+    }
+
+    lines = content.strip().split("\n")
+
+    for i, line in enumerate(lines):
+        line = line.strip()
+
+        if i == 0:
+            title_clean = re.sub(r'^[🎬📁⭐🌍🎭📝🎥👥]', '', line).strip()
+            year_match = re.search(r'\((\d{4})\)', title_clean)
+            if year_match:
+                result["year"] = year_match.group(1)
+                result["title"] = re.sub(r'\s*\(\d{4}\)$', '', title_clean).strip()
+            else:
+                result["title"] = title_clean
+            continue
+
+        line_clean = re.sub(r'^[🎬📁⭐🌍🎭📝🎥👥]', '', line).strip()
+
+        if "Страна:" in line_clean:
+            result["country"] = line_clean.replace("Страна:", "").strip()
+        elif "Режиссер" in line_clean or "Режиссёр" in line_clean:
+            result["director"] = (
+                line_clean.replace("Режиссер:", "").replace("Режиссёр:", "").strip()
             )
-        except subprocess.TimeoutExpired:
-            await event.message.answer("🐾 Генерация затянулась. Попробуй позже.")
-            return
-        except Exception as e:
-            logger.error(f"Ошибка запуска run_slides: {e}")
-            await event.message.answer("🐾 Не смогла запустить генератор. Проверь логи.")
-            return
-
-        stdout = proc.stdout.strip()
-        try:
-            result = json.loads(stdout)
-        except Exception:
-            logger.error(f"Невалидный JSON:\nstdout={stdout}\nstderr={proc.stderr}")
-            await event.message.answer("🐾 Генератор вернул неожиданный ответ. Проверь логи.")
-            return
-
-        if not result.get("ok"):
-            await event.message.answer(
-                f"❌ Ошибка: {result.get('error', 'неизвестно')}",
-                attachments=[get_main_menu()]
+        elif "Актеры" in line_clean or "Актёры" in line_clean:
+            result["actors"] = (
+                line_clean.replace("Актеры:", "").replace("Актёры:", "").strip()
             )
-            return
 
-        files = result.get("files", [])
-        if not files:
-            await event.message.answer("🐾 Генератор не вернул файлов. Проверь логи.")
-            return
+    return result
 
-        # === 1. Собираем ZIP ===
-        zip_name = "slides.zip"
-        zip_path = os.path.join(SLIDES_OUTPUT, zip_name)
 
-        try:
-            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-                for name in files:
-                    file_path = os.path.join(SLIDES_OUTPUT, name)
-                    if os.path.exists(file_path):
-                        zf.write(file_path, arcname=name)
-            logger.info(f"✅ ZIP собран: {zip_path}")
-        except Exception as e:
-            logger.error(f"Ошибка сборки ZIP: {e}")
-            zip_path = None
+def parse_opinion_file(file_path):
+    with open(file_path, "r", encoding="utf-8") as f:
+        content = f.read()
 
-        # === 2. Пробуем отправить ZIP в чат (не падаем при ошибке) ===
-        zip_sent = False
-        if zip_path and os.path.exists(zip_path):
-            try:
-                await self._send_document(event, zip_path)
-                zip_sent = True
-                logger.info("✅ ZIP отправлен в чат")
-            except Exception as e:
-                logger.warning(f"⚠️ Не смогла отправить ZIP в чат: {e}")
+    result = {
+        "opinion": "",
+        "rating": 0,
+        "hashtags": [],
+        "atmosphere_hashtags": [],
+    }
 
-        # === 3. Финальное сообщение + ссылка на архив ===
-        download_url = (
-            "https://bothost.ru/file-manager.php"
-            "?bot=bot_1790103008_5442_dimamuffin"
-            "&download=%2Fapp%2Fslides%2Foutput%2Fslides.zip"
-        )
-
-        buttons = [
-            [{"type": "callback", "text": "🎨 Слайды", "payload": "slides_menu"}],
-            [{"type": "callback", "text": "🏠 В главное меню", "payload": "back_to_menu"}],
-        ]
-        keyboard = InlineKeyboardMarkup(buttons)
-
-        if zip_sent:
-            text = (
-                "🎉 <b>Готово!</b>\n\n"
-                "📦 Архив <b>slides.zip</b> отправлен выше.\n"
-                f"📂 <a href='{download_url}'>Скачать архив</a>\n\n"
-                "💡 Внутри: card_1..5.html, post.txt, post.html. "
-                "Открой HTML в браузере и сделай скриншот через DevTools → Capture node screenshot."
-            )
+    for line in content.strip().split("\n"):
+        line = line.strip()
+        if line.startswith("Оценка:"):
+            m = re.search(r'(\d+)', line)
+            if m:
+                result["rating"] = int(m.group(1))
+        elif line.startswith("Настроение:"):
+            result["hashtags"].extend(re.findall(r'#[А-Яа-яA-Za-z_\w]+', line))
+        elif line.startswith("Атмосфера:"):
+            result["atmosphere_hashtags"].extend(re.findall(r'#[А-Яа-яA-Za-z_\w]+', line))
         else:
-            text = (
-                "🎉 <b>Готово!</b>\n\n"
-                f"📂 <a href='{download_url}'>Скачать slides.zip</a>\n\n"
-                "💡 Внутри: card_1..5.html, post.txt, post.html. "
-                "Открой HTML в браузере и сделай скриншот через DevTools → Capture node screenshot."
+            result["opinion"] += line + " "
+
+    result["opinion"] = result["opinion"].strip()
+    result["hashtags"] = list(dict.fromkeys(result["hashtags"]))
+    result["atmosphere_hashtags"] = list(dict.fromkeys(result["atmosphere_hashtags"]))
+    return result
+
+
+# ============================================================
+# DEEPSEEK — РАЗБИВКА МНЕНИЯ
+# ============================================================
+
+def split_opinion_with_deepseek(text, rating, hashtags, atmosphere_hashtags, logger):
+    prompt = f"""Ты — КиноИщейка, собака-девочка, кинокритик с отличным чутьём. Ты уже написала своё мнение о фильме, теперь тебе нужно разбить его на 5 смысловых блоков для слайдов в Instagram-карусели.
+
+Твоё мнение:
+{text}
+
+Разбей его на 5 логических блоков для следующих слайдов:
+
+1️⃣ "О чём лай?" — кратко о сюжете, главном герое, что происходит
+2️⃣ "Какая атмосфера?" — описание атмосферы, визуала, настроения фильма
+3️⃣ "Какая игра?" — об актёрской игре, кто особенно запомнился
+4️⃣ "Что зарыто?" — о скрытых смыслах, глубине, идеях, символизме
+5️⃣ "Какой вердикт?" — итоговое мнение, плюсы и минусы, стоит ли смотреть
+
+ПРАВИЛА:
+- Каждый блок — 1-2 предложения (максимум 30 слов)
+- Сохрани собачий юмор и образ КиноИщейки (говори о себе в женском роде)
+- Сохрани ключевые метафоры из оригинального текста
+- Блоки должны быть логически связаны
+- НЕ добавляй новые факты, которых нет в исходном мнении
+- НЕ начинай с вводных фраз типа "Я думаю" или "Мне кажется"
+- Используй только те слова и выражения, которые уже есть в тексте
+- В 5-м блоке ("Какой вердикт?") НЕ упоминай оценку в виде числа — она будет отображаться отдельно
+
+Оценка фильма: {rating}/10 (НЕ упоминай эту оценку в тексте блоков!)
+Хэштеги настроения: {" ".join(hashtags) if hashtags else "нет"} (будут на 5-м слайде)
+Хэштеги атмосферы: {" ".join(atmosphere_hashtags) if atmosphere_hashtags else "нет"} (будут на 2-м слайде)
+
+Верни ответ строго в формате JSON:
+{{
+    "blocks": [
+        "текст для слайда 1",
+        "текст для слайда 2",
+        "текст для слайда 3",
+        "текст для слайда 4",
+        "текст для слайда 5"
+    ]
+}}"""
+
+    try:
+        headers = {
+            "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+            "Content-Type": "application/json",
+        }
+        data = {
+            "model": "deepseek-chat",
+            "messages": [
+                {"role": "system", "content": "Ты — КиноИщейка, собака-девочка, кинокритик. Ты помогаешь структурировать свои же обзоры для соцсетей. Будь точной и остроумной. Никогда не упоминай числовую оценку в тексте блоков."},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": 0.3,
+            "max_tokens": 600,
+        }
+
+        logger.info("🤖 Отправляем запрос в DeepSeek...")
+        r = requests.post(DEEPSEEK_URL, headers=headers, json=data, timeout=30)
+        r.raise_for_status()
+        content = r.json()["choices"][0]["message"]["content"]
+        logger.info("📨 Ответ DeepSeek получен")
+
+        m = re.search(r'\{.*\}', content, re.DOTALL)
+        if m:
+            parsed = json.loads(m.group())
+            blocks = parsed.get("blocks", [])
+            if len(blocks) >= 5:
+                return blocks[:5]
+
+        logger.warning("⚠️ Не удалось распарсить ответ DeepSeek, fallback")
+        return fallback_split(text)
+
+    except Exception as e:
+        logger.error(f"⚠️ Ошибка DeepSeek: {e}")
+        return fallback_split(text)
+
+
+def fallback_split(text):
+    sentences = re.split(r'[.!?]', text)
+    sentences = [s.strip() for s in sentences if len(s.strip()) > 10]
+
+    if len(sentences) >= 5:
+        return [sentences[i] + "." for i in range(5)]
+
+    while len(sentences) < 5:
+        sentences.append(sentences[-1] if sentences else "Нет данных")
+
+    return [sentences[i] + "." for i in range(5)]
+
+
+# ============================================================
+# HTML-КАРТОЧКА
+# ============================================================
+
+def generate_card_html(template_path, frame_path, film_data, slide_title, slide_text,
+                       rating, hashtags, atmosphere_hashtags,
+                       is_first, is_atmosphere, is_last):
+    with open(template_path, "r", encoding="utf-8") as f:
+        html = f.read()
+
+    with open(frame_path, "rb") as f:
+        img_data = base64.b64encode(f.read()).decode("utf-8")
+
+    country_year = film_data["country"]
+    if film_data.get("year"):
+        country_year += f", {film_data['year']}"
+
+    html = html.replace("{{FRAME}}", f"data:image/jpeg;base64,{img_data}")
+    html = html.replace("{{SLIDE_TITLE}}", slide_title)
+    html = html.replace("{{SLIDE_TEXT}}", slide_text)
+    html = html.replace("{{RUBRIC}}", "Мнение КиноИщейки")
+
+    html = html.replace("{{ARROW_VISIBLE}}", "" if is_first else "hidden")
+
+    if is_first:
+        html = html.replace("{{TITLE}}", film_data["title"])
+        html = html.replace("{{COUNTRY}}", country_year)
+        html = html.replace("{{DIRECTOR}}", film_data["director"])
+        html = html.replace("{{ACTORS}}", film_data["actors"])
+        html = html.replace("{{FILM_INFO_VISIBLE}}", "")
+    else:
+        html = html.replace("{{TITLE}}", "")
+        html = html.replace("{{COUNTRY}}", "")
+        html = html.replace("{{DIRECTOR}}", "")
+        html = html.replace("{{ACTORS}}", "")
+        html = html.replace("{{FILM_INFO_VISIBLE}}", "hidden")
+
+    if is_last:
+        bones = ""
+        for i in range(10):
+            bones += (
+                '<span class="bone-filled">🦴</span>'
+                if i < rating
+                else '<span class="bone-empty">🦴</span>'
             )
 
-        await event.message.answer(
-            text,
-            parse_mode="html",
-            attachments=[keyboard],
+        rating_html = f"""
+        <div class="rating-wrapper">
+          <span class="rating-number">{rating}</span>
+          <span class="rating-bones">{bones}</span>
+        </div>
+        """
+        html = html.replace("{{RATING}}", rating_html)
+    else:
+        html = html.replace("{{RATING}}", "")
+
+    if is_atmosphere and atmosphere_hashtags:
+        html = html.replace(
+            "{{HASHTAGS}}",
+            f'<div class="hashtags">{" ".join(atmosphere_hashtags[:5])}</div>',
         )
+    elif is_last and hashtags:
+        html = html.replace(
+            "{{HASHTAGS}}",
+            f'<div class="hashtags">{" ".join(hashtags[:5])}</div>',
+        )
+    else:
+        html = html.replace("{{HASHTAGS}}", "")
+
+    return html
+
+
+# ============================================================
+# POST.TXT — нормализация и эмодзи
+# ============================================================
+
+def normalize_paragraphs(text):
+    if not text:
+        return ""
+    break_markers = (
+        "Оценка:", "Настроение:", "Атмосфера:",
+        "🎞", "Загляни", "👉", "А если", "#мнение",
+    )
+    lines = text.split("\n")
+    paragraphs, current = [], []
+
+    for line in lines:
+        s = line.strip()
+        if not s:
+            if current:
+                paragraphs.append(" ".join(current))
+                current = []
+            continue
+        if current and any(s.startswith(m) for m in break_markers):
+            paragraphs.append(" ".join(current))
+            current = [s]
+        else:
+            current.append(s)
+
+    if current:
+        paragraphs.append(" ".join(current))
+
+    return "\n\n".join(paragraphs)
+
+
+PARAGRAPH_EMOJIS = ["🐕", "🦴", "🐾", "🎬", "🎞"]
+
+
+def emojize_paragraphs(text):
+    if not text:
+        return text
+    paragraphs = text.split("\n\n")
+    result, idx = [], 0
+    for p in paragraphs:
+        p = p.strip()
+        if not p:
+            continue
+        if re.match(r'^[\U0001F300-\U0001FAFF\u2600-\u27BF]', p):
+            result.append(p)
+            continue
+        if p.startswith("Оценка:"):
+            result.append("⭐ " + p)
+        elif p.startswith("Настроение:"):
+            result.append("🏷 " + p)
+        elif p.startswith("Атмосфера:"):
+            result.append("🌫 " + p)
+        else:
+            result.append(f"{PARAGRAPH_EMOJIS[idx % len(PARAGRAPH_EMOJIS)]} {p}")
+            idx += 1
+    return "\n\n".join(result)
+
+
+# ============================================================
+# POST.TXT — сборка
+# ============================================================
+
+def build_post_text(input_dir):
+    opinion_path = os.path.join(input_dir, "opinion.txt")
+    cta_path = os.path.join(input_dir, "cta.txt")
+
+    with open(opinion_path, "r", encoding="utf-8") as f:
+        opinion_text = f.read().strip()
+
+    cta = ""
+    if os.path.exists(cta_path):
+        with open(cta_path, "r", encoding="utf-8") as f:
+            cta = f.read().strip()
+
+    opinion_text = normalize_paragraphs(opinion_text)
+    cta = normalize_paragraphs(cta)
+    opinion_text = emojize_paragraphs(opinion_text)
+
+    parts = [opinion_text]
+    if cta:
+        parts.append(cta)
+    return "\n\n".join(parts).strip() + "\n"
+
+
+# ============================================================
+# POST.HTML — сборка
+# ============================================================
+
+def build_post_html(input_dir):
+    """
+    Формирует HTML-версию поста:
+    - название фильма — жирное и кликабельное (ведёт на Кинопоиск)
+    - строки «Оценка:», «Настроение:», «Атмосфера:» — жирные
+    - ссылка на бота в CTA — кликабельная
+    """
+    opinion_path = os.path.join(input_dir, "opinion.txt")
+    cta_path = os.path.join(input_dir, "cta.txt")
+    film_path = os.path.join(input_dir, "film.txt")
+
+    # --- читаем мнение ---
+    with open(opinion_path, "r", encoding="utf-8") as f:
+        opinion_text = f.read().strip()
+
+    # --- читаем CTA ---
+    cta = ""
+    if os.path.exists(cta_path):
+        with open(cta_path, "r", encoding="utf-8") as f:
+            cta = f.read().strip()
+
+    # --- читаем карточку фильма ---
+    film_title = ""
+    film_year = ""
+    film_url = ""
+    if os.path.exists(film_path):
+        with open(film_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+        if lines:
+            first_line = lines[0].strip()
+            m = re.search(r'🎬\s*(.+?)\s*\((\d{4})\)', first_line)
+            if m:
+                film_title = m.group(1).strip()
+                film_year = m.group(2).strip()
+            else:
+                film_title = re.sub(r'^[🎬📁⭐🌍🎭📝🎥👥]\s*', '', first_line).strip()
+        # ссылка
+        for line in lines:
+            m = re.search(r'🔗\s*(https?://\S+)', line)
+            if m:
+                film_url = m.group(1)
+                break
+
+    # --- убираем 🔗-ссылку из мнения ---
+    opinion_text = re.sub(r'\n*🔗\s*https?://\S+\s*$', '', opinion_text).strip()
+
+    # --- нормализуем и эмодзируем ---
+    opinion_text = normalize_paragraphs(opinion_text)
+    cta = normalize_paragraphs(cta)
+    opinion_text = emojize_paragraphs(opinion_text)
+
+    # --- экранирование ---
+    def esc(s):
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    # --- собираем ---
+    parts = []
+
+    # Шапка: кликабельный заголовок
+    if film_title:
+        title_text = f"{esc(film_title)} ({esc(film_year)})" if film_year else esc(film_title)
+        if film_url:
+            parts.append(f'<h1>🎬 <a href="{film_url}">{title_text}</a></h1>')
+        else:
+            parts.append(f'<h1>🎬 {title_text}</h1>')
+
+    # Абзацы мнения
+    for para in opinion_text.split("\n\n"):
+        para = para.strip()
+        if not para:
+            continue
+        if para.startswith(("⭐", "🏷", "🌫")):
+            parts.append(f"<p><b>{esc(para)}</b></p>")
+        else:
+            parts.append(f"<p>{esc(para)}</p>")
+
+    # CTA
+    if cta:
+        for para in cta.split("\n\n"):
+            para = para.strip()
+            if not para:
+                continue
+            url_match = re.search(r'(https?://\S+)', para)
+            if url_match:
+                url = url_match.group(1)
+                para_html = esc(para).replace(url, f'<a href="{url}">{url}</a>')
+                parts.append(f"<p>{para_html}</p>")
+            else:
+                parts.append(f"<p>{esc(para)}</p>")
+
+    body = "\n".join(parts)
+
+    html = f"""<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>КиноИщейка — пост</title>
+    <style>
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            max-width: 720px;
+            margin: 40px auto;
+            padding: 0 20px;
+            line-height: 1.6;
+            color: #222;
+            background: #fafafa;
+        }}
+        h1 {{
+            font-size: 24px;
+            margin: 0 0 24px 0;
+            line-height: 1.3;
+        }}
+        h1 a {{
+            color: #5a2d8c;
+            text-decoration: none;
+            border-bottom: 2px solid transparent;
+            transition: border-color 0.15s;
+        }}
+        h1 a:hover {{
+            border-bottom-color: #5a2d8c;
+        }}
+        p {{
+            margin: 12px 0;
+            font-size: 16px;
+        }}
+        b {{
+            font-weight: 600;
+            color: #111;
+        }}
+        a {{
+            color: #5a2d8c;
+            text-decoration: none;
+            border-bottom: 1px dashed #5a2d8c;
+        }}
+        a:hover {{
+            border-bottom-style: solid;
+        }}
+    </style>
+</head>
+<body>
+{body}
+</body>
+</html>
+"""
+    return html
+
+
+# ============================================================
+# ГЕНЕРАЦИЯ SINGLE
+# ============================================================
+
+def generate_single(rubric, input_dir, output_dir, logger):
+    film_path = os.path.join(input_dir, "film.txt")
+    opinion_path = os.path.join(input_dir, "opinion.txt")
+
+    if not os.path.exists(film_path):
+        return {"ok": False, "error": "Не найден film.txt", "code": "MISSING_FILE"}
+    if not os.path.exists(opinion_path):
+        return {"ok": False, "error": "Не найден opinion.txt", "code": "MISSING_FILE"}
+
+    film_data = parse_film_file(film_path)
+    opinion_data = parse_opinion_file(opinion_path)
+
+    logger.info(f"🎬 Фильм: {film_data['title']} ({film_data['year']})")
+    logger.info(f"⭐ Оценка: {opinion_data['rating']}/10")
+
+    blocks = split_opinion_with_deepseek(
+        opinion_data["opinion"],
+        opinion_data["rating"],
+        opinion_data["hashtags"],
+        opinion_data["atmosphere_hashtags"],
+        logger,
+    )
+
+    slide_titles = rubric["slide_titles"]
+
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    template_path = os.path.join(base_dir, "templates", rubric["template"])
+    frames_dir = os.path.join(input_dir, "frames")
+
+    if not os.path.exists(template_path):
+        return {"ok": False, "error": f"Шаблон не найден: {template_path}", "code": "MISSING_TEMPLATE"}
+
+    for i in range(5):
+        frame_path = os.path.join(frames_dir, f"frame_{i+1}.jpg")
+        if not os.path.exists(frame_path):
+            return {"ok": False, "error": f"Не найден кадр: frame_{i+1}.jpg", "code": "MISSING_FRAME"}
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    logger.info("🎨 Генерация 5 карточек...")
+
+    created = []
+
+    for i in range(5):
+        frame_path = os.path.join(frames_dir, f"frame_{i+1}.jpg")
+        html = generate_card_html(
+            template_path=template_path,
+            frame_path=frame_path,
+            film_data=film_data,
+            slide_title=slide_titles[i],
+            slide_text=blocks[i],
+            rating=opinion_data["rating"],
+            hashtags=opinion_data["hashtags"],
+            atmosphere_hashtags=opinion_data["atmosphere_hashtags"],
+            is_first=(i == 0),
+            is_atmosphere=(i == 1),
+            is_last=(i == 4),
+        )
+
+        out_path = os.path.join(output_dir, f"card_{i+1}.html")
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(html)
+
+        created.append(f"card_{i+1}.html")
+        logger.info(f"✅ Слайд {i+1}: {slide_titles[i]} → card_{i+1}.html")
+
+    # post.txt
+    post_text = build_post_text(input_dir)
+    post_path = os.path.join(output_dir, "post.txt")
+    with open(post_path, "w", encoding="utf-8") as f:
+        f.write(post_text)
+    created.append("post.txt")
+    logger.info("✅ post.txt сохранён")
+
+    # post.html
+    post_html = build_post_html(input_dir)
+    post_html_path = os.path.join(output_dir, "post.html")
+    with open(post_html_path, "w", encoding="utf-8") as f:
+        f.write(post_html)
+    created.append("post.html")
+    logger.info("✅ post.html сохранён")
+
+    return {"ok": True, "files": created}
+
+
+# ============================================================
+# ЗАГЛУШКА MULTI
+# ============================================================
+
+def generate_multi(rubric, input_dir, output_dir, logger):
+    return {
+        "ok": False,
+        "error": f"Рубрика '{rubric['title']}' (multi) ещё не реализована.",
+        "code": "NOT_IMPLEMENTED",
+    }
+
+
+# ============================================================
+# ГЛАВНАЯ ТОЧКА ВХОДА
+# ============================================================
+
+def generate(rubric_key, input_dir, output_dir):
+    """
+    Генерирует слайды и post-файлы.
+    Возвращает dict: {"ok": bool, "files": [...], "error": "..."}
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    log_path = os.path.join(output_dir, "generation.log")
+    logger = setup_logger(log_path)
+
+    logger.info("=" * 50)
+    logger.info(f"🐕 Запуск генерации. Рубрика: {rubric_key}")
+
+    rubric = get_rubric(rubric_key)
+    if not rubric:
+        msg = f"Рубрика '{rubric_key}' не найдена"
+        logger.error(f"❌ {msg}")
+        return {"ok": False, "error": msg, "code": "UNKNOWN_RUBRIC"}
+
+    if not rubric.get("enabled"):
+        msg = f"Рубрика '{rubric['title']}' ещё не реализована"
+        logger.warning(f"⚠️ {msg}")
+        return {"ok": False, "error": msg, "code": "NOT_ENABLED"}
+
+    if rubric["type"] == "single":
+        result = generate_single(rubric, input_dir, output_dir, logger)
+    elif rubric["type"] == "multi":
+        result = generate_multi(rubric, input_dir, output_dir, logger)
+    else:
+        result = {
+            "ok": False,
+            "error": f"Неизвестный тип: {rubric['type']}",
+            "code": "UNKNOWN_TYPE",
+        }
+
+    if result.get("ok"):
+        logger.info("🎉 ГОТОВО!")
+    else:
+        logger.error(f"❌ Ошибка: {result.get('error')}")
+
+    return result
